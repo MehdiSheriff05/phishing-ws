@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Phish Guard</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main class="container">
+      <h1>Phish Guard</h1>
+      <p class="subtitle">Analyze the currently open email or webpage.</p>
+
+      <button id="analyzeBtn">Analyze current page</button>
+      <button id="testNotificationBtn">Test notification</button>
+
+      <section class="allowlist">
+        <label for="apiBaseInput">Backend API base URL</label>
+        <input id="apiBaseInput" placeholder="http://127.0.0.1:5000" />
+        <button id="saveApiBtn">Save API URL</button>
+      </section>
+
+      <section class="allowlist">
+        <label for="allowlistInput">Trusted sender domains (comma-separated)</label>
+        <input id="allowlistInput" placeholder="example.com, mycompany.com" />
+        <button id="saveAllowlistBtn">Save allow-list</button>
+      </section>
+
+      <section class="allowlist">
+        <label for="blocklistInput">Blocked sender domains (comma-separated)</label>
+        <input id="blocklistInput" placeholder="bad-domain.top, fake-secure.xyz" />
+        <button id="saveBlocklistBtn">Save blocklist</button>
+      </section>
+
+      <div id="status" class="status">Idle</div>
+
+      <section id="result" class="result hidden">
+        <div id="banner" class="banner">Risk</div>
+        <p><strong>Score:</strong> <span id="score">-</span></p>
+        <p><strong>Level:</strong> <span id="level">-</span></p>
+        <ul id="reasons"></ul>
+      </section>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

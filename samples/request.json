@@ -1,0 +1,19 @@
+{
+  "sender_email": "security-update@paypa1-login.top",
+  "sender_name": "PayPal Security",
+  "subject": "URGENT: Verify your account now",
+  "body_text": "Your account is suspended. Click below to login and reset your password immediately!",
+  "urls": [
+    "http://192.168.0.1/verify/login",
+    "https://paypal.verify-secure-account.top/reset"
+  ],
+  "attachments": [
+    {
+      "filename": "invoice.pdf.exe",
+      "extension": "exe",
+      "size_kb": 120.5,
+      "mime_type": "application/octet-stream"
+    }
+  ],
+  "page_source": "gmail"
+}

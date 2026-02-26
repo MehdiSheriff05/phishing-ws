@@ -1,0 +1,20 @@
+{
+  "risk_score": 86.4,
+  "risk_level": "high",
+  "reasons": [
+    "Email text uses high-pressure or credential-themed language",
+    "URL uses an IP address instead of a domain: 192.168.0.1",
+    "Suspicious keyword found in URL: http://192.168.0.1/verify/login",
+    "Uncommon TLD found in URL: .top",
+    "Sender name references Paypal but email domain is paypa1-login.top",
+    "Executable-like attachment detected: invoice.pdf.exe",
+    "Double extension pattern detected: invoice.pdf.exe"
+  ],
+  "indicators": {
+    "text": 71.5,
+    "url": 75.0,
+    "sender": 33.0,
+    "attachment": 55.0
+  },
+  "recommended_action": "Do not click links or open attachments. Verify sender through a trusted channel."
+}
