@@ -230,3 +230,56 @@ python scripts/train_email_ml.py --csv samples/email_training_format.csv
 
 This produces baseline metrics at:
 - `models/checkpoints/email-ml-metrics.json`
+
+## Import `phishing_pot` dataset and train
+
+1. Clone dataset repo:
+
+```bash
+git clone --depth 1 https://github.com/rf-peixoto/phishing_pot.git /tmp/phishing_pot
+```
+
+2. Convert `.eml` samples into training CSV format (with synthetic benign class for balance):
+
+```bash
+python scripts/import_phishing_pot_dataset.py \
+  --eml-dir /tmp/phishing_pot/email \
+  --out data/processed/phishing_pot_email_training.csv \
+  --limit 2500 \
+  --benign-ratio 1.0
+```
+
+3. Train classical ML baseline:
+
+```bash
+python scripts/train_email_ml.py \
+  --csv data/processed/phishing_pot_email_training.csv \
+  --output models/checkpoints/phishing_pot_email_ml_metrics.json
+```
+
+4. (Optional fast run) Build a smaller BERT training subset:
+
+```bash
+python - <<'PY'
+import pandas as pd
+df = pd.read_csv("data/processed/phishing_pot_email_training.csv")
+small = pd.concat([df[df.label==1].head(300), df[df.label==0].head(300)]).sample(frac=1, random_state=42)
+small.to_csv("data/processed/phishing_pot_email_training_small.csv", index=False)
+PY
+```
+
+5. Train BERT checkpoint:
+
+```bash
+python scripts/train_bert_email.py \
+  --csv data/processed/phishing_pot_email_training_small.csv \
+  --model-name distilbert-base-uncased \
+  --output-dir models/checkpoints/phishing_pot_email_bert \
+  --epochs 1 \
+  --batch-size 8
+```
+
+6. Activate model-backed NLP in app:
+- `ENABLE_TRANSFORMER=true`
+- `MODEL_PATH=models/checkpoints/phishing_pot_email_bert`
+- restart Flask (`python app.py`)

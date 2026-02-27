@@ -42,3 +42,6 @@ data/raw/*.txt
 data/raw/*.csv
 data/raw/*.json
 data/processed/*.csv
+
+# Trained model artifacts
+models/checkpoints/
