@@ -1,0 +1,5 @@
+sender_email,sender_name,subject,body_text,urls,attachments,label
+security@paypa1-alert.top,PayPal Security,URGENT verify your account,"Your account is suspended. Login and reset your password now.","https://paypa1-alert.top/login/reset;http://192.168.0.1/verify","invoice.pdf.exe",1
+alerts@bank-secure-check.xyz,Bank Team,Account verification required,"We noticed unusual activity. Verify details immediately.","https://bank-secure-check.xyz/verify","statement.zip",1
+news@github.com,GitHub,Security update,"We improved account security settings documentation.","https://github.com/security","",0
+noreply@python.org,Python,Weekly community digest,"Latest package updates and conference links.","https://www.python.org/blogs/","",0

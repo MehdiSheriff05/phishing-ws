@@ -189,3 +189,44 @@ Notes:
   - Add domain reputation APIs
   - Add sandboxed attachment analysis
   - Replace heuristics with calibrated fine-tuned model
+
+## Email CSV format for training
+
+Use this CSV schema for email model training:
+
+`sender_email,sender_name,subject,body_text,urls,attachments,label`
+
+- `urls`: semicolon-delimited list or plain string
+- `attachments`: plain string summary (or filenames list)
+- `label`: `1` phishing, `0` legitimate
+
+Sample file:
+- `samples/email_training_format.csv`
+
+## Train BERT (NLP model)
+
+```bash
+python scripts/train_bert_email.py \
+  --csv samples/email_training_format.csv \
+  --model-name distilbert-base-uncased \
+  --output-dir models/checkpoints/email-bert \
+  --epochs 2
+```
+
+After training, activate model-backed NLP in backend:
+
+1. Set env:
+   - `ENABLE_TRANSFORMER=true`
+   - `MODEL_PATH=models/checkpoints/email-bert`
+2. Restart Flask (`python app.py`)
+
+`services/model_inference.py` will then run transformer inference, with heuristic fallback if model load fails.
+
+## Train classical ML baseline
+
+```bash
+python scripts/train_email_ml.py --csv samples/email_training_format.csv
+```
+
+This produces baseline metrics at:
+- `models/checkpoints/email-ml-metrics.json`

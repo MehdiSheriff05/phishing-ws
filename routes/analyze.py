@@ -16,6 +16,7 @@ logger = setup_logger("phish_guard.analyze")
 classifier = PhishingTextClassifier(
     TextInferenceConfig(
         model_name=config.MODEL_NAME,
+        model_path=config.MODEL_PATH,
         aggregation="mean",
         enable_transformer=config.ENABLE_TRANSFORMER,
     )
