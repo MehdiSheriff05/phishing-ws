@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "Phishing Email Scanner",
+  "version": "1.0.0",
+  "description": "Scans visible email-like page content for phishing probability.",
+  "permissions": ["storage", "activeTab", "tabs", "notifications", "scripting"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "service_worker.js"
+  },
+  "action": {
+    "default_title": "Phishing Scanner",
+    "default_popup": "popup.html"
+  },
+  "options_page": "options.html",
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

@@ -1,0 +1,89 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Phishing Scanner</title>
+    <style>
+      body {
+        font-family: "Segoe UI", sans-serif;
+        margin: 0;
+        padding: 14px;
+        width: 320px;
+        background: #f7f9fc;
+        color: #1f2937;
+      }
+      h1 {
+        margin: 0 0 10px;
+        font-size: 16px;
+      }
+      button {
+        width: 100%;
+        border: none;
+        background: #0f766e;
+        color: #fff;
+        padding: 10px;
+        border-radius: 8px;
+        cursor: pointer;
+      }
+      button:disabled {
+        opacity: 0.7;
+        cursor: default;
+      }
+      #status {
+        margin-top: 10px;
+        font-size: 12px;
+      }
+      .result {
+        margin-top: 12px;
+        padding: 10px;
+        border-radius: 8px;
+        background: #fff;
+        border: 1px solid #d1d5db;
+      }
+      ul {
+        margin: 8px 0 0;
+        padding-left: 18px;
+      }
+      .phishing {
+        color: #b91c1c;
+        font-weight: 600;
+      }
+      .legitimate {
+        color: #166534;
+        font-weight: 600;
+      }
+      a {
+        display: inline-block;
+        margin-top: 8px;
+        font-size: 12px;
+      }
+      .actions {
+        margin-top: 10px;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+      }
+      .actions button {
+        padding: 8px;
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Phishing Email Scanner</h1>
+    <button id="scanBtn">Scan Current Page</button>
+    <div id="status"></div>
+    <div id="result" class="result" hidden>
+      <div id="resultContent"></div>
+      <div class="actions">
+        <button id="reportSpamBtn">Report Spam</button>
+        <button id="reportNotSpamBtn">Report Not Spam</button>
+        <button id="blockDomainBtn">Block Domain</button>
+        <button id="allowDomainBtn">Allow Domain</button>
+      </div>
+    </div>
+    <a href="options.html" target="_blank">Configure API URL</a>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

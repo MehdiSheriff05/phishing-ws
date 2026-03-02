@@ -1,0 +1,51 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Scanner Options</title>
+    <style>
+      body {
+        font-family: "Segoe UI", sans-serif;
+        margin: 24px;
+        max-width: 700px;
+      }
+      h1 {
+        margin-bottom: 8px;
+      }
+      label {
+        display: block;
+        margin-bottom: 6px;
+        font-weight: 600;
+      }
+      input {
+        width: 100%;
+        padding: 10px;
+        border: 1px solid #cbd5e1;
+        border-radius: 8px;
+        margin-bottom: 10px;
+      }
+      button {
+        border: none;
+        background: #0f766e;
+        color: #fff;
+        padding: 10px 14px;
+        border-radius: 8px;
+        cursor: pointer;
+      }
+      #status {
+        margin-top: 8px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Phishing Scanner Options</h1>
+    <p>Set the backend API base URL used by the extension.</p>
+
+    <label for="apiBaseUrl">API Base URL</label>
+    <input id="apiBaseUrl" type="url" placeholder="http://127.0.0.1:8000" />
+    <button id="saveBtn">Save</button>
+    <div id="status"></div>
+
+    <script src="options.js"></script>
+  </body>
+</html>
