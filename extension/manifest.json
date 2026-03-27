@@ -3,7 +3,7 @@
   "name": "Phishing Email Scanner",
   "version": "1.0.0",
   "description": "Scans visible email-like page content for phishing probability.",
-  "permissions": ["storage", "activeTab", "tabs", "notifications", "scripting"],
+  "permissions": ["storage", "activeTab", "tabs", "notifications", "scripting", "webNavigation"],
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "service_worker.js"

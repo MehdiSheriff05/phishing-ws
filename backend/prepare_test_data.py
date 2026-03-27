@@ -246,6 +246,8 @@ def main() -> None:
                 "posttraining_probability": "",
                 "pretraining_label": "",
                 "posttraining_label": "",
+                "pretraining_description": "",
+                "posttraining_description": "",
                 "notes": "",
             }
         )
@@ -267,6 +269,8 @@ def main() -> None:
                 "posttraining_probability": "",
                 "pretraining_label": "",
                 "posttraining_label": "",
+                "pretraining_description": "",
+                "posttraining_description": "",
                 "notes": "",
             }
         )
@@ -296,6 +300,8 @@ def main() -> None:
                     "posttraining_probability": "",
                     "pretraining_label": "",
                     "posttraining_label": "",
+                    "pretraining_description": "",
+                    "posttraining_description": "",
                     "notes": "synthetic_non_phishing",
                 }
             )

@@ -3,9 +3,10 @@ const lastScanAtByTab = new Map();
 const AUTO_SCAN_DEBOUNCE_MS = 1200;
 const NOTIF_ID_PREFIX = "scan-result-";
 const LIKELY_PHISHING_THRESHOLD = 0.5;
-const MAX_AUTO_SCAN_TRIES = 4;
-const RETRY_DELAY_MS = 900;
-const autoScanAttemptsByTab = new Map();
+const LAST_SCAN_STORAGE_PREFIX = "lastScanResult:";
+const LOW_CONTENT_TEXT_LEN = 80;
+const LOW_CONTENT_LINK_COUNT = 2;
+const FRESH_SCAN_WINDOW_MS = 15000;
 
 function getApiBaseUrl() {
   return new Promise((resolve) => {
@@ -100,6 +101,16 @@ async function runScanForTab(tabId) {
     payload = await requestPageData(tabId);
   }
 
+  const textLen = (payload?.visible_text || "").trim().length;
+  const linkCount = Array.isArray(payload?.links) ? payload.links.length : 0;
+  if (textLen < LOW_CONTENT_TEXT_LEN && linkCount < LOW_CONTENT_LINK_COUNT) {
+    // Early auto scans can happen before page content settles; retry extraction once.
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    try {
+      payload = await requestPageData(tabId);
+    } catch (_) {}
+  }
+
   const apiBaseUrl = await getApiBaseUrl();
 
   const response = await fetch(`${apiBaseUrl}/predict`, {
@@ -113,7 +124,7 @@ async function runScanForTab(tabId) {
   }
 
   const prediction = await response.json();
-  return { prediction, payload };
+  return { prediction, payload, tabUrl: tab.url || "" };
 }
 
 async function scanCurrentPage() {
@@ -121,12 +132,114 @@ async function scanCurrentPage() {
   return runScanForTab(tab.id);
 }
 
+function getStoredScanForTab(tabId, pageUrl = "") {
+  return new Promise((resolve) => {
+    const key = `${LAST_SCAN_STORAGE_PREFIX}${tabId}`;
+    chrome.storage.local.get([key], (result) => {
+      const saved = result[key] || null;
+      if (!saved) {
+        resolve(null);
+        return;
+      }
+      if (pageUrl && saved.pageUrl && saved.pageUrl !== pageUrl) {
+        resolve(null);
+        return;
+      }
+      const ageMs = Date.now() - Number(saved.updatedAt || 0);
+      if (ageMs > FRESH_SCAN_WINDOW_MS) {
+        resolve(null);
+        return;
+      }
+      resolve(saved);
+    });
+  });
+}
+
+function getEvaluationRelativePath(pageUrl = "") {
+  if (!pageUrl) {
+    return "";
+  }
+
+  try {
+    const parsed = new URL(pageUrl);
+    const path = decodeURIComponent(parsed.pathname || "").replace(/\\/g, "/");
+
+    if (parsed.protocol === "file:") {
+      const marker = "/test_data/";
+      const markerIndex = path.lastIndexOf(marker);
+      if (markerIndex < 0) {
+        return "";
+      }
+      const relativePath = path.slice(markerIndex + marker.length).replace(/^\/+/, "");
+      return normalizeEvaluationRelativePath(relativePath);
+    }
+
+    const isLocalHttp =
+      (parsed.protocol === "http:" || parsed.protocol === "https:") &&
+      (parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost") &&
+      parsed.port === "8010";
+
+    if (isLocalHttp) {
+      const relativePath = path.replace(/^\/+/, "");
+      return normalizeEvaluationRelativePath(relativePath);
+    }
+
+    return "";
+  } catch (_) {
+    return "";
+  }
+}
+
+function normalizeEvaluationRelativePath(relativePath = "") {
+  if (!relativePath.endsWith(".html")) {
+    return "";
+  }
+  if (relativePath === "index.html" || relativePath.endsWith("/index.html")) {
+    return "";
+  }
+  if (!relativePath.startsWith("phishing/") && !relativePath.startsWith("non_phishing/")) {
+    return "";
+  }
+  return relativePath;
+}
+
+async function logEvaluationResultIfNeeded(scanResult) {
+  const pageUrl = scanResult?.tabUrl || "";
+  const relativePath = getEvaluationRelativePath(pageUrl);
+  if (!relativePath) {
+    return null;
+  }
+
+  const prediction = scanResult?.prediction || null;
+  if (!prediction?.label) {
+    return null;
+  }
+
+  const apiBaseUrl = await getApiBaseUrl();
+  const response = await fetch(`${apiBaseUrl}/evaluation/log`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      relative_path: relativePath,
+      label: prediction.label,
+      probability_phishing: Number(prediction.probability_phishing || 0),
+      flags: Array.isArray(prediction.flags) ? prediction.flags : []
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(`Evaluation log failed (${response.status})`);
+  }
+
+  return response.json();
+}
+
 function showScanNotification(scanResult) {
   const prediction = scanResult.prediction || scanResult;
-  const probabilityPct = (prediction.probability_phishing * 100).toFixed(1);
+  const probability = Number(prediction.probability_phishing || 0).toFixed(2);
   const flagsText = (prediction.flags || []).slice(0, 2).join(" | ");
   const message = [
-    `Label: ${prediction.label} (${probabilityPct}% phishing probability)`,
+    `Label: ${prediction.label} (p=${probability})`,
     flagsText || "No warning flags.",
     "Open popup to scan manually anytime."
   ].join("\n");
@@ -140,6 +253,25 @@ function showScanNotification(scanResult) {
   });
 }
 
+function saveLastScanResult(tabId, scanResult, pageUrl = "") {
+  const prediction = scanResult.prediction || scanResult;
+  const payload = scanResult.payload || {};
+  const key = `${LAST_SCAN_STORAGE_PREFIX}${tabId}`;
+  chrome.storage.local.set({
+    [key]: {
+      tabId,
+      pageUrl,
+      updatedAt: Date.now(),
+      prediction,
+      payload
+    }
+  });
+
+  const badge = prediction.label === "phishing" ? "!" : "";
+  chrome.action.setBadgeText({ tabId, text: badge });
+  chrome.action.setBadgeBackgroundColor({ tabId, color: prediction.label === "phishing" ? "#B91C1C" : "#0F766E" });
+}
+
 function getRiskLevel(probabilityPhishing) {
   if (probabilityPhishing >= 0.75) return "high";
   if (probabilityPhishing >= LIKELY_PHISHING_THRESHOLD) return "medium";
@@ -149,15 +281,6 @@ function getRiskLevel(probabilityPhishing) {
 function isLikelyPhishing(prediction) {
   if (!prediction) return false;
   return prediction.label === "phishing" || (prediction.probability_phishing || 0) >= LIKELY_PHISHING_THRESHOLD;
-}
-
-function scheduleRetry(tabId, reason) {
-  const tries = (autoScanAttemptsByTab.get(tabId) || 0) + 1;
-  autoScanAttemptsByTab.set(tabId, tries);
-  if (tries >= MAX_AUTO_SCAN_TRIES) {
-    return;
-  }
-  setTimeout(() => maybeAutoScan(tabId, `${reason}:retry${tries}`), RETRY_DELAY_MS);
 }
 
 function maybeAutoScan(tabId, _reason = "event") {
@@ -170,8 +293,9 @@ function maybeAutoScan(tabId, _reason = "event") {
   runScanForTab(tabId)
     .then((result) => {
       lastScanAtByTab.set(tabId, Date.now());
-      autoScanAttemptsByTab.delete(tabId);
       const prediction = result.prediction || result;
+      saveLastScanResult(tabId, result, result.tabUrl || "");
+      logEvaluationResultIfNeeded(result).catch(() => {});
       const riskLevel = getRiskLevel(prediction.probability_phishing || 0);
       if ((riskLevel === "medium" || riskLevel === "high") && isLikelyPhishing(prediction)) {
         showScanNotification(result);
@@ -182,14 +306,42 @@ function maybeAutoScan(tabId, _reason = "event") {
       if (msg.toLowerCase().includes("restricted")) {
         return;
       }
-      scheduleRetry(tabId, "scan_failed");
+      // Keep silent on transient auto-scan errors.
     });
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === "SCAN_CURRENT_PAGE") {
-    scanCurrentPage()
-      .then((data) => sendResponse({ ok: true, data }))
+    const requestedTabId = Number(message.tabId || 0);
+    const requestedTabUrl = String(message.tabUrl || "");
+    const doScan = async () => {
+      if (message.preferCached && requestedTabId > 0) {
+        const cached = await getStoredScanForTab(requestedTabId, requestedTabUrl);
+        if (cached?.prediction) {
+          return { prediction: cached.prediction, payload: cached.payload || {}, tabUrl: cached.pageUrl || requestedTabUrl };
+        }
+      }
+      if (requestedTabId > 0) {
+        return runScanForTab(requestedTabId);
+      }
+      return scanCurrentPage();
+    };
+
+    doScan()
+      .then(async (data) => {
+        try {
+          if (requestedTabId > 0) {
+            saveLastScanResult(requestedTabId, data, requestedTabUrl || data.tabUrl || "");
+          } else {
+            const tab = await getActiveTab();
+            saveLastScanResult(tab.id, data, tab.url || data.tabUrl || "");
+          }
+        } catch (_) {}
+        try {
+          await logEvaluationResultIfNeeded(data);
+        } catch (_) {}
+        sendResponse({ ok: true, data });
+      })
       .catch((error) => sendResponse({ ok: false, error: String(error.message || error) }));
     return true;
   }
@@ -200,6 +352,23 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     }
     sendResponse({ ok: true });
     return false;
+  }
+
+  if (message?.type === "GET_LAST_SCAN_FOR_ACTIVE_TAB") {
+    const requestedTabId = Number(message.tabId || 0);
+    const requestedTabUrl = String(message.tabUrl || "");
+    const withKnownTab = requestedTabId > 0;
+    const run = async () => {
+      if (withKnownTab) {
+        return getStoredScanForTab(requestedTabId, requestedTabUrl);
+      }
+      const tab = await getActiveTab();
+      return getStoredScanForTab(tab.id, tab.url || "");
+    };
+    run()
+      .then((data) => sendResponse({ ok: true, data: data || null }))
+      .catch((error) => sendResponse({ ok: false, error: String(error.message || error) }));
+    return true;
   }
 
   return false;
@@ -230,4 +399,18 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 
 chrome.tabs.onActivated.addListener(({ tabId }) => {
   maybeAutoScan(tabId, "tab_activated");
+});
+
+chrome.webNavigation.onCompleted.addListener((details) => {
+  if (details.frameId !== 0) {
+    return;
+  }
+  maybeAutoScan(details.tabId, "webnav_completed");
+});
+
+chrome.webNavigation.onHistoryStateUpdated.addListener((details) => {
+  if (details.frameId !== 0) {
+    return;
+  }
+  maybeAutoScan(details.tabId, "webnav_history_state");
 });

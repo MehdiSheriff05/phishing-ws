@@ -19,6 +19,20 @@ class PredictResponse(BaseModel):
     flags: list[str]
 
 
+class EvaluationLogRequest(BaseModel):
+    relative_path: str = Field(min_length=1)
+    label: str = Field(min_length=1)
+    probability_phishing: float
+    flags: list[str] = Field(default_factory=list)
+
+
+class EvaluationLogResponse(BaseModel):
+    saved: bool
+    phase: str
+    relative_path: str
+    csv_path: str
+
+
 class ReputationCheckRequest(BaseModel):
     urls: list[str] = Field(default_factory=list, min_length=1)
 

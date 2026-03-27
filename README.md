@@ -82,7 +82,9 @@ python backend/train.py
 
 What this does:
 - Downloads Kaggle dataset `naserabdullahalam/phishing-email-dataset` using `kagglehub`
-- Trains TF-IDF + Logistic Regression
+- excludes emails already present in `test_data/` so training does not reuse your evaluation emails
+- samples a balanced training pool of `900 phishing + 900 non-phishing` by default
+- trains TF-IDF + Logistic Regression
 - Computes and saves metrics:
   - precision
   - recall
@@ -94,6 +96,20 @@ What this does:
   - `classifier.joblib`
   - `metrics.json`
   - `confusion_matrix.csv`
+
+Useful training options:
+
+```bash
+python backend/train.py --samples-per-class 900
+python backend/train.py --samples-per-class 900 --allow-synthetic-non-phishing
+python backend/train.py --samples-per-class 900 --include-feedback
+```
+
+Notes:
+- default behavior is now aligned with evaluation safety: test emails in `test_data/` are excluded from training
+- if the Kaggle source does not contain enough non-phishing emails, training will stop with an error unless you add `--allow-synthetic-non-phishing`
+- `--include-feedback` is optional and off by default
+- `metrics.json` records how many test-overlap rows were excluded
 
 ## 3) Pre-Training vs Trained Mode (for documentation)
 
@@ -259,8 +275,8 @@ curl -X POST http://127.0.0.1:8000/feedback/report-not-spam \
 
 ### Retraining with user feedback
 
-`python backend/train.py` now automatically merges:
-- base Kaggle dataset
+`python backend/train.py --include-feedback` merges:
+- base Kaggle dataset sample
 - user feedback examples from `backend/artifacts/feedback/training_feedback.csv`
 
 So the model gradually adapts when you retrain periodically.
@@ -297,6 +313,62 @@ Note:
    - **Report Not Spam**
    - **Block Domain**
    - **Allow Domain**
+
+## 9) Evaluate Against `test_data` Automatically
+
+The project includes ready-made HTML test emails under:
+- `test_data/phishing/`
+- `test_data/non_phishing/`
+
+The evaluation CSV is:
+- `test_data/evaluation_log_template.csv`
+
+Automatic logging behavior:
+- when you scan a local page from `test_data/phishing/*.html` or `test_data/non_phishing/*.html`
+- the extension now sends the result to the backend automatically
+- the backend updates the matching row in `evaluation_log_template.csv`
+- if the model is not trained yet, it fills:
+  - `pretraining_probability`
+  - `pretraining_label`
+- if the model is trained and loaded, it fills:
+  - `posttraining_probability`
+  - `posttraining_label`
+
+Recommended workflow:
+
+1. Start the backend before training:
+```bash
+uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
+```
+2. Load the Chrome extension.
+3. In `chrome://extensions`, enable **Allow access to file URLs** for the extension.
+4. Open `test_data/index.html` in Chrome.
+5. Open each phishing and non-phishing HTML email page.
+6. Let the auto-scan run, or click **Scan Current Page**.
+7. The CSV is updated automatically for the current file page.
+8. After baseline testing is complete, train the model:
+```bash
+python backend/train.py
+```
+9. Restart the backend and run the same pages again.
+10. The same CSV will now fill the `posttraining_*` columns automatically.
+
+You can also run the whole evaluation without opening pages in Chrome:
+
+```bash
+python backend/evaluate_test_data.py --api-base-url http://127.0.0.1:8000
+```
+
+What this script does:
+- reads every HTML email in `test_data/phishing/` and `test_data/non_phishing/`
+- extracts the email text and links
+- sends each email to `/predict`
+- writes the result into `test_data/evaluation_log_template.csv` through `/evaluation/log`
+- prints a simple summary at the end
+
+Use it twice:
+- once before training to fill the `pretraining_*` columns
+- once after training to fill the `posttraining_*` columns
 
 ## Notes
 

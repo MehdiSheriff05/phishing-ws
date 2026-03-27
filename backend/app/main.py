@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
+from .evaluation import EvaluationLogStore
 from .feedback import FeedbackStore
 from .flags import detect_flags
 from .model_io import load_artifacts
@@ -10,6 +11,8 @@ from .reputation import DomainReputationService, extract_domain
 from .schemas import (
     DomainPreferenceRequest,
     EmailFeedbackRequest,
+    EvaluationLogRequest,
+    EvaluationLogResponse,
     FeedbackStatsResponse,
     PreferenceStateResponse,
     PredictRequest,
@@ -33,13 +36,15 @@ classifier = None
 model_loaded = False
 reputation_service = None
 feedback_store = None
+evaluation_log_store = None
 
 
 @app.on_event("startup")
 def startup_event() -> None:
-    global vectorizer, classifier, model_loaded, reputation_service, feedback_store
+    global vectorizer, classifier, model_loaded, reputation_service, feedback_store, evaluation_log_store
     reputation_service = DomainReputationService()
     feedback_store = FeedbackStore()
+    evaluation_log_store = EvaluationLogStore()
     try:
         vectorizer, classifier = load_artifacts()
         model_loaded = True
@@ -142,6 +147,23 @@ def report_not_spam(payload: EmailFeedbackRequest) -> dict[str, object]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.post("/evaluation/log", response_model=EvaluationLogResponse)
+def evaluation_log(payload: EvaluationLogRequest) -> EvaluationLogResponse:
+    if evaluation_log_store is None:
+        raise HTTPException(status_code=500, detail="Evaluation log store is not ready")
+    try:
+        result = evaluation_log_store.log_prediction(
+            relative_path=payload.relative_path,
+            label=payload.label,
+            probability_phishing=payload.probability_phishing,
+            flags=payload.flags,
+            model_loaded=model_loaded,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return EvaluationLogResponse(**result)
+
+
 @app.get("/reputation/status")
 def reputation_status() -> dict[str, object]:
     if reputation_service is None:
@@ -187,7 +209,8 @@ def predict(payload: PredictRequest) -> PredictResponse:
     allowed_domains = sorted({d for d in link_domains if d and feedback_store.is_allowed(d)})
 
     if vectorizer is None or classifier is None or not model_loaded:
-        simple_score = min(0.95, 0.12 * len(flags))
+        # In pre-training mode, treat each independent rule hit as a stronger signal.
+        simple_score = min(0.95, 0.25 * len(flags))
         proba = simple_score
         label = "phishing" if proba >= 0.5 else "legitimate"
 

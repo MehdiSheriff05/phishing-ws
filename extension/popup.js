@@ -10,6 +10,22 @@ const allowDomainBtn = document.getElementById("allowDomainBtn");
 let lastScanPayload = null;
 let lastPrediction = null;
 
+function getActiveTabInfo() {
+  return new Promise((resolve, reject) => {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+        return;
+      }
+      if (!tabs || !tabs[0]?.id) {
+        reject(new Error("No active tab found"));
+        return;
+      }
+      resolve({ tabId: tabs[0].id, tabUrl: tabs[0].url || "" });
+    });
+  });
+}
+
 function getApiBaseUrl() {
   return new Promise((resolve) => {
     chrome.storage.sync.get(["apiBaseUrl"], (result) => {
@@ -49,7 +65,7 @@ function extractPrimaryDomainFromPayload(payload) {
 }
 
 function renderResult(data) {
-  const probPct = (data.probability_phishing * 100).toFixed(2);
+  const probValue = Number(data.probability_phishing || 0).toFixed(2);
   const labelClass = data.label === "phishing" ? "phishing" : "legitimate";
 
   const flagsHtml = (data.flags || []).length
@@ -58,43 +74,105 @@ function renderResult(data) {
 
   resultContentEl.innerHTML = `
     <div>Label: <span class="${labelClass}">${data.label}</span></div>
-    <div>Phishing probability: <strong>${probPct}%</strong></div>
+    <div>Phishing probability: <strong>${probValue}</strong></div>
     <div>Flags:</div>
     ${flagsHtml}
   `;
   resultEl.hidden = false;
 }
 
-scanBtn.addEventListener("click", () => {
+function handleScanResponse(response, successStatus = "Scan complete.") {
+  if (chrome.runtime.lastError) {
+    statusEl.textContent = `Error: ${chrome.runtime.lastError.message}`;
+    return;
+  }
+
+  if (!response?.ok) {
+    statusEl.textContent = `Error: ${response?.error || "Unknown error"}`;
+    return;
+  }
+
+  const result = response.data || {};
+  lastScanPayload = result.payload || null;
+  lastPrediction = result.prediction || null;
+
+  if (!lastPrediction) {
+    statusEl.textContent = "Error: invalid prediction response.";
+    return;
+  }
+
+  statusEl.textContent = successStatus;
+  renderResult(lastPrediction);
+}
+
+function requestScan(tabInfo, { preferCached = false, successStatus = "Scan complete." } = {}) {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage(
+      { type: "SCAN_CURRENT_PAGE", ...tabInfo, preferCached },
+      (response) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        if (!response?.ok) {
+          reject(new Error(response?.error || "Unknown error"));
+          return;
+        }
+        handleScanResponse(response, successStatus);
+        resolve(response.data || {});
+      }
+    );
+  });
+}
+
+async function loadAutoScanResult() {
+  let tabInfo;
+  try {
+    tabInfo = await getActiveTabInfo();
+    const { tabId, tabUrl } = tabInfo;
+    chrome.runtime.sendMessage(
+      { type: "GET_LAST_SCAN_FOR_ACTIVE_TAB", tabId, tabUrl },
+      (response) => {
+        if (!chrome.runtime.lastError && response?.ok && response.data?.prediction) {
+          lastScanPayload = response.data.payload || null;
+          lastPrediction = response.data.prediction || null;
+          if (lastPrediction) {
+            statusEl.textContent = "Auto scan result loaded. Refreshing...";
+            renderResult(lastPrediction);
+          }
+        }
+      }
+    );
+  } catch (_) {
+    return;
+  }
+
+  try {
+    await requestScan(tabInfo, { preferCached: false, successStatus: "Scan refreshed for current page." });
+  } catch (_) {}
+}
+
+scanBtn.addEventListener("click", async () => {
   statusEl.textContent = "Scanning...";
   resultEl.hidden = true;
   scanBtn.disabled = true;
 
-  chrome.runtime.sendMessage({ type: "SCAN_CURRENT_PAGE" }, (response) => {
+  let tabInfo;
+  try {
+    tabInfo = await getActiveTabInfo();
+  } catch (error) {
     scanBtn.disabled = false;
+    statusEl.textContent = `Error: ${error.message || error}`;
+    return;
+  }
 
-    if (chrome.runtime.lastError) {
-      statusEl.textContent = `Error: ${chrome.runtime.lastError.message}`;
-      return;
-    }
-
-    if (!response?.ok) {
-      statusEl.textContent = `Error: ${response?.error || "Unknown error"}`;
-      return;
-    }
-
-    const result = response.data || {};
-    lastScanPayload = result.payload || null;
-    lastPrediction = result.prediction || null;
-
-    if (!lastPrediction) {
-      statusEl.textContent = "Error: invalid prediction response.";
-      return;
-    }
-
-    statusEl.textContent = "Scan complete.";
-    renderResult(lastPrediction);
-  });
+  try {
+    await requestScan(tabInfo, { preferCached: false, successStatus: "Scan complete." });
+  } catch (error) {
+    statusEl.textContent = `Error: ${error.message || error}`;
+  } finally {
+    scanBtn.disabled = false;
+  }
 });
 
 reportSpamBtn.addEventListener("click", async () => {
@@ -158,3 +236,5 @@ allowDomainBtn.addEventListener("click", async () => {
     statusEl.textContent = `Error: ${error.message || error}`;
   }
 });
+
+loadAutoScanResult();
