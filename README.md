@@ -1,8 +1,16 @@
 # Undergraduate Phishing Email Detection System
 
 This project includes:
-- `backend/`: FastAPI service + model training pipeline (TF-IDF + Logistic Regression)
-- `extension/`: Chrome Extension (Manifest V3) that extracts visible text + links and calls `/predict`
+- `backend/`: FastAPI service for prediction, evaluation logging, feedback, and model training
+- `extension/`: Chrome Extension (Manifest V3) that extracts visible text and links, then calls the FastAPI `/predict` endpoint
+
+The system works in two phases:
+- pretraining mode: heuristic-only phishing detection, with no trained model loaded
+- trained mode: TF-IDF + Logistic Regression prediction, while still returning explanation flags
+
+The training workflow is designed to avoid data leakage:
+- training uses a balanced set of `900 phishing + 900 non-phishing` emails
+- emails already used in `test_data/` are excluded from the training pool
 
 ## Project Structure
 
@@ -12,6 +20,7 @@ phishing/
 │   ├── app/
 │   │   ├── feedback.py
 │   │   ├── flags.py
+│   │   ├── evaluation.py
 │   │   ├── main.py
 │   │   ├── model_io.py
 │   │   ├── reputation.py
@@ -20,6 +29,8 @@ phishing/
 │   │   └── reputation/
 │   │       ├── trusted_domains.txt
 │   │       └── flagged_domains.txt
+│   ├── evaluate_test_data.py
+│   ├── prepare_test_data.py
 │   ├── train.py
 │   ├── Dockerfile
 │   └── .dockerignore
@@ -324,15 +335,21 @@ The evaluation CSV is:
 - `test_data/evaluation_log_template.csv`
 
 Automatic logging behavior:
-- when you scan a local page from `test_data/phishing/*.html` or `test_data/non_phishing/*.html`
+- when you scan a page from:
+  - `file://.../test_data/phishing/*.html`
+  - `file://.../test_data/non_phishing/*.html`
+  - `http://127.0.0.1:8010/phishing/*.html`
+  - `http://127.0.0.1:8010/non_phishing/*.html`
 - the extension now sends the result to the backend automatically
 - the backend updates the matching row in `evaluation_log_template.csv`
 - if the model is not trained yet, it fills:
   - `pretraining_probability`
   - `pretraining_label`
+  - `pretraining_description`
 - if the model is trained and loaded, it fills:
   - `posttraining_probability`
   - `posttraining_label`
+  - `posttraining_description`
 
 Recommended workflow:
 
@@ -343,6 +360,11 @@ uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
 2. Load the Chrome extension.
 3. In `chrome://extensions`, enable **Allow access to file URLs** for the extension.
 4. Open `test_data/index.html` in Chrome.
+   Or serve the folder locally:
+```bash
+python -m http.server 8010 --directory test_data
+```
+   Then open `http://127.0.0.1:8010/`.
 5. Open each phishing and non-phishing HTML email page.
 6. Let the auto-scan run, or click **Scan Current Page**.
 7. The CSV is updated automatically for the current file page.
@@ -369,6 +391,14 @@ What this script does:
 Use it twice:
 - once before training to fill the `pretraining_*` columns
 - once after training to fill the `posttraining_*` columns
+
+The CSV now stores both result values and short explanations:
+- `pretraining_probability`
+- `pretraining_label`
+- `pretraining_description`
+- `posttraining_probability`
+- `posttraining_label`
+- `posttraining_description`
 
 ## Notes
 
