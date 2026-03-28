@@ -33,3 +33,9 @@ backend/artifacts/*.json
 backend/artifacts/*.csv
 backend/artifacts/feedback/*.jsonl
 backend/artifacts/feedback/*.csv
+
+# Local dissertation/export artifacts
+dissertation_draft.md
+dissertation_draft.pdf
+dissertation_draft.rtf
+dissertation_draft_print.html
