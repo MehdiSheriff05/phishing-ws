@@ -155,85 +155,6 @@ function getStoredScanForTab(tabId, pageUrl = "") {
   });
 }
 
-function getEvaluationRelativePath(pageUrl = "") {
-  if (!pageUrl) {
-    return "";
-  }
-
-  try {
-    const parsed = new URL(pageUrl);
-    const path = decodeURIComponent(parsed.pathname || "").replace(/\\/g, "/");
-
-    if (parsed.protocol === "file:") {
-      const marker = "/test_data/";
-      const markerIndex = path.lastIndexOf(marker);
-      if (markerIndex < 0) {
-        return "";
-      }
-      const relativePath = path.slice(markerIndex + marker.length).replace(/^\/+/, "");
-      return normalizeEvaluationRelativePath(relativePath);
-    }
-
-    const isLocalHttp =
-      (parsed.protocol === "http:" || parsed.protocol === "https:") &&
-      (parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost") &&
-      parsed.port === "8010";
-
-    if (isLocalHttp) {
-      const relativePath = path.replace(/^\/+/, "");
-      return normalizeEvaluationRelativePath(relativePath);
-    }
-
-    return "";
-  } catch (_) {
-    return "";
-  }
-}
-
-function normalizeEvaluationRelativePath(relativePath = "") {
-  if (!relativePath.endsWith(".html")) {
-    return "";
-  }
-  if (relativePath === "index.html" || relativePath.endsWith("/index.html")) {
-    return "";
-  }
-  if (!relativePath.startsWith("phishing/") && !relativePath.startsWith("non_phishing/")) {
-    return "";
-  }
-  return relativePath;
-}
-
-async function logEvaluationResultIfNeeded(scanResult) {
-  const pageUrl = scanResult?.tabUrl || "";
-  const relativePath = getEvaluationRelativePath(pageUrl);
-  if (!relativePath) {
-    return null;
-  }
-
-  const prediction = scanResult?.prediction || null;
-  if (!prediction?.label) {
-    return null;
-  }
-
-  const apiBaseUrl = await getApiBaseUrl();
-  const response = await fetch(`${apiBaseUrl}/evaluation/log`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      relative_path: relativePath,
-      label: prediction.label,
-      probability_phishing: Number(prediction.probability_phishing || 0),
-      flags: Array.isArray(prediction.flags) ? prediction.flags : []
-    })
-  });
-
-  if (!response.ok) {
-    throw new Error(`Evaluation log failed (${response.status})`);
-  }
-
-  return response.json();
-}
-
 function showScanNotification(scanResult) {
   const prediction = scanResult.prediction || scanResult;
   const probability = Number(prediction.probability_phishing || 0).toFixed(2);
@@ -295,7 +216,6 @@ function maybeAutoScan(tabId, _reason = "event") {
       lastScanAtByTab.set(tabId, Date.now());
       const prediction = result.prediction || result;
       saveLastScanResult(tabId, result, result.tabUrl || "");
-      logEvaluationResultIfNeeded(result).catch(() => {});
       const riskLevel = getRiskLevel(prediction.probability_phishing || 0);
       if ((riskLevel === "medium" || riskLevel === "high") && isLikelyPhishing(prediction)) {
         showScanNotification(result);
@@ -336,9 +256,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
             const tab = await getActiveTab();
             saveLastScanResult(tab.id, data, tab.url || data.tabUrl || "");
           }
-        } catch (_) {}
-        try {
-          await logEvaluationResultIfNeeded(data);
         } catch (_) {}
         sendResponse({ ok: true, data });
       })
