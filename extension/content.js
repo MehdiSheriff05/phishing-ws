@@ -11,6 +11,7 @@ function isGmailPage() {
 
 // Find the currently opened Gmail message body instead of scanning the full Gmail shell.
 function getGmailScanRoot() {
+  // Gmail is a single-page app, so these selectors target the latest visible email body.
   const selectors = [
     "div[role='main'] .a3s.aiL",
     "div[role='main'] .a3s",
@@ -20,6 +21,7 @@ function getGmailScanRoot() {
   ];
 
   for (const selector of selectors) {
+    // Candidate elements are filtered so hidden or tiny fragments do not become scan roots.
     const candidates = Array.from(document.querySelectorAll(selector)).filter((element) => {
       if (!(element instanceof HTMLElement)) return false;
       if (!isVisible(element)) return false;
@@ -31,6 +33,7 @@ function getGmailScanRoot() {
     }
   }
 
+  // If Gmail changes its markup, scanning the main area is safer than scanning the whole shell.
   const main = document.querySelector("div[role='main']");
   if (main instanceof HTMLElement && isVisible(main)) {
     return main;
@@ -53,9 +56,11 @@ function extractVisibleText(root = document.body) {
   const chunks = [];
 
   for (const node of nodes) {
+    // Leaf nodes avoid duplicating text from parent containers.
     if (!isVisible(node)) continue;
     if (node.children.length > 0) continue;
 
+    // Short visible snippets are still useful, but whitespace is normalized first.
     const text = (node.textContent || "").replace(/\s+/g, " ").trim();
     if (text.length >= 2) {
       chunks.push(text);
@@ -67,6 +72,7 @@ function extractVisibleText(root = document.body) {
 
 // Extract links separately because phishing checks need both anchor text and destination URL.
 function extractLinks(root = document.body) {
+  // The backend needs both the words users see and the true destination URL.
   return Array.from(root.querySelectorAll("a[href]"))
     .map((a) => ({
       text: (a.innerText || a.textContent || "").replace(/\s+/g, " ").trim().slice(0, 300),
@@ -78,6 +84,7 @@ function extractLinks(root = document.body) {
 
 // Build a compact page fingerprint so Gmail single-page navigation can trigger rescans.
 function getPageFingerprint() {
+  // Fingerprints let the extension detect Gmail route changes without relying only on page reloads.
   const title = document.title || "";
   const url = window.location.href || "";
   const heading =
@@ -96,6 +103,7 @@ function queueAutoScanTrigger() {
   if (scanTriggerTimer) {
     clearTimeout(scanTriggerTimer);
   }
+  // A short delay lets Gmail finish rendering the new email before extraction begins.
   scanTriggerTimer = setTimeout(() => {
     chrome.runtime.sendMessage({ type: "AUTO_SCAN_TRIGGER" });
   }, 900);
@@ -105,6 +113,7 @@ function queueAutoScanTrigger() {
 function checkPageStateChange() {
   const fingerprint = getPageFingerprint();
   if (fingerprint !== lastFingerprint) {
+    // Only trigger scans when visible page identity changes.
     lastFingerprint = fingerprint;
     queueAutoScanTrigger();
   }
@@ -114,6 +123,7 @@ function checkPageStateChange() {
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === "EXTRACT_EMAIL_DATA") {
     try {
+      // The service worker calls this path before sending data to FastAPI.
       const scanRoot = getScanRoot();
       const visible_text = extractVisibleText(scanRoot);
       const links = extractLinks(scanRoot);
@@ -130,12 +140,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 chrome.runtime.sendMessage({ type: "AUTO_SCAN_TRIGGER" });
 lastFingerprint = getPageFingerprint();
 
+// MutationObserver watches Gmail and other single-page apps for content changes.
 // Detect SPA transitions (e.g., opening different Gmail emails).
 const stateObserver = new MutationObserver(() => {
   checkPageStateChange();
 });
 stateObserver.observe(document.documentElement, { subtree: true, childList: true, attributes: false });
 
+// Browser navigation events catch URL/hash changes that may not create a full reload.
 window.addEventListener("popstate", checkPageStateChange);
 window.addEventListener("hashchange", checkPageStateChange);
 setInterval(checkPageStateChange, 1200);

@@ -10,15 +10,19 @@ import pandas as pd
 
 
 DATASET_REF = "naserabdullahalam/phishing-email-dataset"
+
+# Candidate column names make the script robust to small dataset schema differences.
 TEXT_CANDIDATES = ["text", "email_text", "body", "message", "content", "Email Text"]
 LABEL_CANDIDATES = ["label", "target", "class", "is_phishing", "Label", "type"]
 
 
 def _normalize_label(value) -> int:
+    # Unknown labels return -1 so they can be filtered out before sampling.
     if pd.isna(value):
         return -1
     if isinstance(value, (int, np.integer, float, np.floating)):
         return int(value > 0)
+    # Dataset labels may be words instead of numbers, so normalize both formats.
     value_str = str(value).strip().lower()
     if value_str in {"1", "phishing", "spam", "malicious", "true", "yes"}:
         return 1
@@ -28,6 +32,7 @@ def _normalize_label(value) -> int:
 
 
 def _find_column(columns: list[str], candidates: list[str]) -> str:
+    # Case-insensitive lookup avoids failures caused by "Label" versus "label".
     lower_map = {c.lower(): c for c in columns}
     for name in candidates:
         if name.lower() in lower_map:
@@ -36,6 +41,7 @@ def _find_column(columns: list[str], candidates: list[str]) -> str:
 
 
 def _pick_usable_file(files: list[Path]) -> Path:
+    # The Kaggle folder may contain multiple files; this finds the first usable data table.
     for file in files:
         try:
             if file.suffix.lower() == ".csv":
@@ -50,6 +56,7 @@ def _pick_usable_file(files: list[Path]) -> Path:
 
 
 def _load_dataset_frame(dataset_file: str | None = None) -> pd.DataFrame:
+    # A provided dataset file is useful when the user already downloaded data locally.
     files: list[Path] = []
 
     if dataset_file:
@@ -59,6 +66,7 @@ def _load_dataset_frame(dataset_file: str | None = None) -> pd.DataFrame:
         files = [path]
     else:
         try:
+            # Otherwise kagglehub downloads or locates the configured phishing email dataset.
             dataset_path = Path(kagglehub.dataset_download(DATASET_REF))
             files = list(dataset_path.rglob("*.csv")) + list(dataset_path.rglob("*.parquet"))
         except Exception:
@@ -71,6 +79,7 @@ def _load_dataset_frame(dataset_file: str | None = None) -> pd.DataFrame:
 
     chosen = _pick_usable_file(files)
 
+    # Read the chosen dataset fully after the lightweight usability check above.
     frame = None
     for file in [chosen]:
         try:
@@ -91,6 +100,7 @@ def _load_dataset_frame(dataset_file: str | None = None) -> pd.DataFrame:
 
 
 def _email_html(title: str, sender: str, body: str) -> str:
+    # Each email is wrapped in a simple HTML page so it can be opened in a browser.
     body_html = "<br/>".join(html.escape(line) for line in body.splitlines())
     return f"""<!doctype html>
 <html lang="en">
@@ -124,6 +134,7 @@ def _email_html(title: str, sender: str, body: str) -> str:
 
 
 def _build_synthetic_non_phishing_messages(count: int) -> list[str]:
+    # Synthetic benign emails are a fallback when the dataset lacks enough non-phishing samples.
     templates = [
         "Hi team, the project check-in is at {time} in room {room}. Please review the notes before joining.",
         "Reminder: your library book return date is {date}. You can renew online if needed.",
@@ -138,6 +149,7 @@ def _build_synthetic_non_phishing_messages(count: int) -> list[str]:
     ]
     messages: list[str] = []
     for i in range(count):
+        # Vary time, room, date, and month so the synthetic messages are not duplicates.
         t = templates[i % len(templates)]
         msg = t.format(
             time=f"{9 + (i % 8)}:{(i * 7) % 60:02d}",
@@ -151,6 +163,7 @@ def _build_synthetic_non_phishing_messages(count: int) -> list[str]:
 
 
 def _write_folder_index(folder: Path, title: str) -> None:
+    # Folder indexes let a non-technical tester click through emails in a browser.
     pages = sorted([p for p in folder.glob("*.html") if p.name != "index.html"])
     links = "\n".join([f'<li><a href="./{p.name}">{p.stem}</a></li>' for p in pages])
     content = f"""<!doctype html>
@@ -172,6 +185,7 @@ def _write_folder_index(folder: Path, title: str) -> None:
 
 
 def main() -> None:
+    # This script creates the browser-friendly test set and a blank evaluation CSV template.
     parser = argparse.ArgumentParser(description="Prepare GUI test dataset pages and logging CSV.")
     parser.add_argument("--per-class", type=int, default=100, help="Emails per class for test data.")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for sampling.")
@@ -198,10 +212,12 @@ def main() -> None:
     phishing_dir.mkdir(parents=True, exist_ok=True)
     non_phishing_dir.mkdir(parents=True, exist_ok=True)
 
+    # Load the source dataset and identify which columns contain text and labels.
     df = _load_dataset_frame(dataset_file=args.dataset_file or None)
     text_col = _find_column(df.columns.tolist(), TEXT_CANDIDATES)
     label_col = _find_column(df.columns.tolist(), LABEL_CANDIDATES)
 
+    # Clean rows with missing text or unclear labels before taking samples.
     clean = df[[text_col, label_col]].dropna().copy()
     clean[text_col] = clean[text_col].astype(str).str.strip()
     clean = clean[clean[text_col] != ""]
@@ -211,17 +227,20 @@ def main() -> None:
     phishing_rows = clean[clean["actual_label"] == 1]
     non_phishing_rows = clean[clean["actual_label"] == 0]
 
+    # The test set must include enough real phishing examples to support evaluation.
     if len(phishing_rows) < args.per_class:
         raise ValueError(
             f"Not enough phishing rows. Found phishing={len(phishing_rows)}, required={args.per_class}"
         )
 
+    # Sampling with a seed keeps the generated test set repeatable.
     phishing_sample = phishing_rows.sample(n=args.per_class, random_state=args.seed).reset_index(drop=True)
     non_phishing_sample = non_phishing_rows.sample(
         n=min(args.per_class, len(non_phishing_rows)),
         random_state=args.seed,
     ).reset_index(drop=True)
 
+    # Remove old generated pages before writing a fresh test set.
     for old in phishing_dir.glob("*.html"):
         old.unlink()
     for old in non_phishing_dir.glob("*.html"):
@@ -230,6 +249,7 @@ def main() -> None:
     records: list[dict[str, str | int | float]] = []
 
     for i, row in phishing_sample.iterrows():
+        # Phishing examples are written into the phishing folder with matching CSV labels.
         email_id = f"phishing_{i + 1:03d}"
         rel_path = f"phishing/{email_id}.html"
         body = str(row[text_col])
@@ -253,6 +273,7 @@ def main() -> None:
         )
 
     for i, row in non_phishing_sample.iterrows():
+        # Non-phishing examples are written separately so folder names provide ground truth.
         email_id = f"non_phishing_{i + 1:03d}"
         rel_path = f"non_phishing/{email_id}.html"
         body = str(row[text_col])
@@ -276,6 +297,7 @@ def main() -> None:
         )
 
     if len(non_phishing_sample) < args.per_class:
+        # Synthetic benign messages are only used when explicitly allowed by the user.
         if not args.allow_synthetic_non_phishing:
             raise ValueError(
                 "Non-phishing rows are missing. Re-run with --allow-synthetic-non-phishing "
@@ -285,6 +307,7 @@ def main() -> None:
         synthetic_messages = _build_synthetic_non_phishing_messages(missing)
         start = len(non_phishing_sample)
         for i, body in enumerate(synthetic_messages, start=1):
+            # Synthetic rows are marked in notes so they remain transparent in the CSV.
             email_id = f"non_phishing_{start + i:03d}"
             rel_path = f"non_phishing/{email_id}.html"
             (non_phishing_dir / f"{email_id}.html").write_text(
@@ -309,6 +332,7 @@ def main() -> None:
     _write_folder_index(phishing_dir, "Phishing Test Emails")
     _write_folder_index(non_phishing_dir, "Non-Phishing Test Emails")
 
+    # The root index lets testers choose phishing or non-phishing folders from one page.
     root_index = """<!doctype html>
 <html lang="en">
 <head>
@@ -327,9 +351,11 @@ def main() -> None:
 """
     (out_dir / "index.html").write_text(root_index, encoding="utf-8")
 
+    # The CSV starts blank so later pretraining and post-training scripts can fill results.
     log_df = pd.DataFrame(records).sort_values(by=["actual_label", "email_id"], ascending=[False, True])
     log_df.to_csv(out_dir / "evaluation_log_template.csv", index=False)
 
+    # Console output confirms what was generated for the tester.
     print(f"Saved pages to: {out_dir}")
     final_phishing_count = len(list(phishing_dir.glob("*.html"))) - 1
     final_non_phishing_count = len(list(non_phishing_dir.glob("*.html"))) - 1

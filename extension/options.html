@@ -1,22 +1,27 @@
 <!doctype html>
+<!-- Options page for configuring which FastAPI backend the extension should call. -->
 <html>
   <head>
     <meta charset="utf-8" />
     <title>Scanner Options</title>
     <style>
+      /* A simple layout is enough because this page has one setting. */
       body {
         font-family: "Segoe UI", sans-serif;
         margin: 24px;
         max-width: 700px;
       }
+      /* The heading identifies this as extension configuration, not scan output. */
       h1 {
         margin-bottom: 8px;
       }
+      /* Labels make the URL field understandable for non-technical users. */
       label {
         display: block;
         margin-bottom: 6px;
         font-weight: 600;
       }
+      /* The input accepts either the local backend or a deployed HTTPS backend. */
       input {
         width: 100%;
         padding: 10px;
@@ -24,6 +29,7 @@
         border-radius: 8px;
         margin-bottom: 10px;
       }
+      /* The save button writes the URL into Chrome sync storage. */
       button {
         border: none;
         background: #0f766e;
@@ -32,15 +38,18 @@
         border-radius: 8px;
         cursor: pointer;
       }
+      /* Status text confirms save success or displays Chrome storage errors. */
       #status {
         margin-top: 8px;
       }
     </style>
   </head>
   <body>
+    <!-- This value is read by popup.js and service_worker.js before API calls. -->
     <h1>Phishing Scanner Options</h1>
     <p>Set the backend API base URL used by the extension.</p>
 
+    <!-- Local default is http://127.0.0.1:8000 when running FastAPI on the same machine. -->
     <label for="apiBaseUrl">API Base URL</label>
     <input id="apiBaseUrl" type="url" placeholder="http://127.0.0.1:8000" />
     <button id="saveBtn">Save</button>

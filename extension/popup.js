@@ -13,6 +13,7 @@ let lastPrediction = null;
 function getActiveTabInfo() {
   return new Promise((resolve, reject) => {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      // Chrome extension APIs report errors through runtime.lastError.
       if (chrome.runtime.lastError) {
         reject(new Error(chrome.runtime.lastError.message));
         return;
@@ -21,6 +22,7 @@ function getActiveTabInfo() {
         reject(new Error("No active tab found"));
         return;
       }
+      // Store both ID and URL so cached scan results can be tied to the correct page.
       resolve({ tabId: tabs[0].id, tabUrl: tabs[0].url || "" });
     });
   });
@@ -38,6 +40,7 @@ function getApiBaseUrl() {
 // Send a JSON POST request to FastAPI for actions such as blocklisting and allowlisting.
 async function apiPost(path, body) {
   const apiBaseUrl = await getApiBaseUrl();
+  // Preference actions call FastAPI directly from the popup.
   const response = await fetch(`${apiBaseUrl}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -53,6 +56,7 @@ async function apiPost(path, body) {
 function extractPrimaryDomainFromPayload(payload) {
   if (!payload?.links?.length) return "";
   for (const link of payload.links) {
+    // The first valid linked domain is treated as the page's main actionable domain.
     const href = (link.href || "").trim();
     if (!href) continue;
     try {
@@ -60,6 +64,7 @@ function extractPrimaryDomainFromPayload(payload) {
       const host = (url.hostname || "").replace(/^www\./, "").toLowerCase();
       if (host) return host;
     } catch (_) {
+      // Fallback parsing handles plain domains that are not valid absolute URLs.
       const fallback = href.replace(/^https?:\/\//i, "").split("/")[0].replace(/^www\./, "").toLowerCase();
       if (fallback && fallback.includes(".")) return fallback;
     }
@@ -72,10 +77,12 @@ function renderResult(data) {
   const probValue = Number(data.probability_phishing || 0).toFixed(2);
   const labelClass = data.label === "phishing" ? "phishing" : "legitimate";
 
+  // Flags are the explanation list, so they are shown directly under the score.
   const flagsHtml = (data.flags || []).length
     ? `<ul>${data.flags.map((f) => `<li>${f}</li>`).join("")}</ul>`
     : "<div>No warning flags found.</div>";
 
+  // The popup intentionally keeps the result compact for screenshots and demos.
   resultContentEl.innerHTML = `
     <div>Label: <span class="${labelClass}">${data.label}</span></div>
     <div>Phishing probability: <strong>${probValue}</strong></div>
@@ -98,6 +105,7 @@ function handleScanResponse(response, successStatus = "Scan complete.") {
   }
 
   const result = response.data || {};
+  // Store the latest payload/prediction for allowlist and blocklist button actions.
   lastScanPayload = result.payload || null;
   lastPrediction = result.prediction || null;
 
@@ -113,6 +121,7 @@ function handleScanResponse(response, successStatus = "Scan complete.") {
 // Ask the background service worker to scan the current tab and return the prediction.
 function requestScan(tabInfo, { preferCached = false, successStatus = "Scan complete." } = {}) {
   return new Promise((resolve, reject) => {
+    // The service worker performs extraction and API calls because it has the right permissions.
     chrome.runtime.sendMessage(
       { type: "SCAN_CURRENT_PAGE", ...tabInfo, preferCached },
       (response) => {
@@ -135,6 +144,7 @@ function requestScan(tabInfo, { preferCached = false, successStatus = "Scan comp
 async function loadAutoScanResult() {
   let tabInfo;
   try {
+    // Loading cached results avoids an empty popup while a fresh scan is running.
     tabInfo = await getActiveTabInfo();
     const { tabId, tabUrl } = tabInfo;
     chrome.runtime.sendMessage(
@@ -155,6 +165,7 @@ async function loadAutoScanResult() {
   }
 
   try {
+    // A fresh scan prevents Gmail page changes from displaying stale keyword explanations.
     await requestScan(tabInfo, { preferCached: false, successStatus: "Scan refreshed for current page." });
   } catch (_) {}
 }
@@ -167,6 +178,7 @@ scanBtn.addEventListener("click", async () => {
 
   let tabInfo;
   try {
+    // Manual scanning always targets the currently active tab.
     tabInfo = await getActiveTabInfo();
   } catch (error) {
     scanBtn.disabled = false;
@@ -185,6 +197,7 @@ scanBtn.addEventListener("click", async () => {
 
 // Blocklisting tells the backend to force a warning whenever this linked domain appears again.
 blockDomainBtn.addEventListener("click", async () => {
+  // The popup blocks domains, not entire URLs, because domains are easier to understand.
   const domain = extractPrimaryDomainFromPayload(lastScanPayload);
   if (!domain) {
     statusEl.textContent = "No link domain found to block.";
@@ -200,6 +213,7 @@ blockDomainBtn.addEventListener("click", async () => {
 
 // Allowlisting lowers risk for clean pages, but the backend still warns if content looks phishing-like.
 allowDomainBtn.addEventListener("click", async () => {
+  // Allowlist reduces false positives but does not suppress strong phishing evidence.
   const domain = extractPrimaryDomainFromPayload(lastScanPayload);
   if (!domain) {
     statusEl.textContent = "No link domain found to allow.";

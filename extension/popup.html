@@ -1,9 +1,11 @@
 <!doctype html>
+<!-- Popup shown when the user clicks the Chrome extension icon. -->
 <html>
   <head>
     <meta charset="utf-8" />
     <title>Phishing Scanner</title>
     <style>
+      /* Keep the popup compact because Chrome extension popups have limited space. */
       body {
         font-family: "Segoe UI", sans-serif;
         margin: 0;
@@ -12,10 +14,12 @@
         background: #f7f9fc;
         color: #1f2937;
       }
+      /* The title makes the extension purpose clear during demonstrations. */
       h1 {
         margin: 0 0 10px;
         font-size: 16px;
       }
+      /* Primary action button starts a manual scan of the current tab. */
       button {
         width: 100%;
         border: none;
@@ -25,14 +29,17 @@
         border-radius: 8px;
         cursor: pointer;
       }
+      /* Disabled state prevents double-clicking while a scan is already running. */
       button:disabled {
         opacity: 0.7;
         cursor: default;
       }
+      /* Status text reports progress, errors, and saved preference messages. */
       #status {
         margin-top: 10px;
         font-size: 12px;
       }
+      /* Result card groups label, score, and explanation flags in one visible area. */
       .result {
         margin-top: 12px;
         padding: 10px;
@@ -40,33 +47,40 @@
         background: #fff;
         border: 1px solid #d1d5db;
       }
+      /* Flags are shown as bullets so board members can read the reasons quickly. */
       ul {
         margin: 8px 0 0;
         padding-left: 18px;
       }
+      /* Red label communicates that the backend returned a phishing decision. */
       .phishing {
         color: #b91c1c;
         font-weight: 600;
       }
+      /* Green label communicates that the backend returned a legitimate decision. */
       .legitimate {
         color: #166534;
         font-weight: 600;
       }
+      /* Options link lets the user change the backend URL without editing code. */
       a {
         display: inline-block;
         margin-top: 8px;
         font-size: 12px;
       }
+      /* The domain action buttons sit side-by-side to save popup height. */
       .actions {
         margin-top: 10px;
         display: grid;
         grid-template-columns: 1fr 1fr;
         gap: 8px;
       }
+      /* Smaller action buttons distinguish preferences from the main scan button. */
       .actions button {
         padding: 8px;
         font-size: 12px;
       }
+      /* Hint text explains that preferences apply to the main linked domain. */
       .hint {
         color: #4b5563;
         font-size: 12px;
@@ -76,17 +90,21 @@
     </style>
   </head>
   <body>
+    <!-- Main user action: ask the extension to scan the current browser tab. -->
     <h1>Phishing Email Scanner</h1>
     <button id="scanBtn">Scan Current Page</button>
     <div id="status"></div>
+    <!-- This result panel is hidden until popup.js receives a prediction. -->
     <div id="result" class="result" hidden>
       <div id="resultContent"></div>
       <div class="hint">Use these buttons only when you trust or distrust the main linked domain on this page.</div>
+      <!-- These buttons call backend allowlist/blocklist preference endpoints. -->
       <div class="actions">
         <button id="blockDomainBtn">Block Domain</button>
         <button id="allowDomainBtn">Allow Domain</button>
       </div>
     </div>
+    <!-- The options page stores the FastAPI base URL used by the extension. -->
     <a href="options.html" target="_blank">Configure API URL</a>
 
     <script src="popup.js"></script>

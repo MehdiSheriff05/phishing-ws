@@ -1,175 +1,359 @@
 # Undergraduate Phishing Email Detection System
 
-This project includes:
-- `backend/`: FastAPI service for prediction, evaluation logging, domain preferences, and model training
-- `extension/`: Chrome Extension (Manifest V3) that extracts visible text and links, then calls the FastAPI `/predict` endpoint
+This project is a phishing email detection system built as a Chrome Extension with a FastAPI backend. The extension scans Gmail or normal webpages, extracts visible text and links, sends that content to the backend, and displays a phishing label, phishing probability score, and explanation flags.
 
-The system works in two phases:
-- pretraining mode: heuristic-only phishing detection, with no trained model loaded
-- trained mode: TF-IDF + Logistic Regression prediction, while still returning explanation flags
+The system supports two phases:
+
+- **Pretraining mode**: the backend has no trained model loaded and uses a deliberately weak heuristic baseline.
+- **Post-training mode**: the backend loads a trained TF-IDF + Logistic Regression model and uses it to calculate phishing probability.
 
 The training workflow is designed to avoid data leakage:
-- training uses a balanced set of `900 phishing + 900 non-phishing` emails
-- emails already used in `test_data/` are excluded from the training pool
+
+- Training uses a balanced set of `900 phishing + 900 non-phishing` emails.
+- Emails already used inside `test_data/` are excluded from the training pool.
+- The same test set can be evaluated before and after training to show improvement.
 
 ## Project Structure
 
-```
+```text
 phishing/
 ├── backend/
 │   ├── app/
+│   │   ├── evaluation.py
 │   │   ├── feedback.py
 │   │   ├── flags.py
-│   │   ├── evaluation.py
 │   │   ├── main.py
 │   │   ├── model_io.py
 │   │   ├── reputation.py
 │   │   └── schemas.py
-│   ├── artifacts/                # Saved model + metrics generated after training
-│   │   └── reputation/
-│   │       ├── trusted_domains.txt
-│   │       └── flagged_domains.txt
+│   ├── artifacts/
+│   │   ├── classifier.joblib
+│   │   ├── vectorizer.joblib
+│   │   ├── metrics.json
+│   │   └── confusion_matrix.csv
 │   ├── evaluate_test_data.py
 │   ├── prepare_test_data.py
 │   ├── train.py
-│   ├── Dockerfile
-│   └── .dockerignore
+│   └── Dockerfile
 ├── extension/
 │   ├── manifest.json
 │   ├── content.js
 │   ├── service_worker.js
-│   ├── icon128.png
 │   ├── popup.html
 │   ├── popup.js
 │   ├── options.html
-│   └── options.js
+│   ├── options.js
+│   └── icon128.png
+├── test_data/
+│   ├── phishing/
+│   ├── non_phishing/
+│   ├── evaluation_log_template.csv
+│   └── fixed_evaluation_log_template.csv
 ├── requirements.txt
 └── README.md
 ```
 
-## 1) Python Virtual Environment (Required)
+## Application Architecture UML
 
-All backend development should run inside a venv.
+```text
++-----------------------------+          +-------------------------------+
+|        Chrome Browser       |          |        FastAPI Backend         |
+|-----------------------------|          |-------------------------------|
+| Gmail / Website Page        |          | /predict                      |
+| visible text + links        |          | /health                       |
++-------------+---------------+          | /preferences/block            |
+              |                          | /preferences/allow            |
+              v                          | /reputation/check             |
++-----------------------------+          +---------------+---------------+
+| extension/content.js        |                          |
+|-----------------------------|                          |
+| isVisible()                 |                          |
+| getGmailScanRoot()          |                          |
+| extractVisibleText()        |                          |
+| extractLinks()              |                          |
+| detects page changes        |                          |
++-------------+---------------+                          |
+              | chrome.runtime message                   |
+              v                                          |
++-----------------------------+      HTTP POST /predict  |
+| extension/service_worker.js |------------------------->|
+|-----------------------------|                          |
+| runScanForTab()             |                          v
+| requestPageData()           |          +-------------------------------+
+| maybeAutoScan()             |          | backend/app/main.py           |
+| saveLastScanResult()        |          |-------------------------------|
+| showScanNotification()      |          | startup_event()               |
++-------------+---------------+          | predict()                     |
+              |                          | apply_user_domain_policy()    |
+              |                          | has_strong_heuristic_evidence |
+              v                          +---------------+---------------+
++-----------------------------+                          |
+| extension/popup.js          |                          |
+|-----------------------------|                          |
+| renderResult()              |                          |
+| Scan button                 |                          |
+| Block Domain button         |                          |
+| Allow Domain button         |                          |
++-----------------------------+                          |
+                                                         |
+                      +----------------------------------+----------------------------------+
+                      |                                  |                                  |
+                      v                                  v                                  v
+        +-----------------------------+    +-----------------------------+    +-----------------------------+
+        | backend/app/flags.py        |    | backend/app/model_io.py     |    | backend/app/reputation.py   |
+        |-----------------------------|    |-----------------------------|    |-----------------------------|
+        | detect_flags()              |    | load_artifacts()            |    | DomainReputationService     |
+        | keyword checks              |    | vectorizer.joblib           |    | trusted domains             |
+        | money scam checks           |    | classifier.joblib           |    | flagged domains             |
+        | pressure checks             |    +-------------+---------------+    | Google Safe Browsing opt.   |
+        | link checks                 |                  |                    +-----------------------------+
+        +-----------------------------+                  |
+                                                         v
+                                           +-----------------------------+
+                                           | backend/artifacts/          |
+                                           |-----------------------------|
+                                           | vectorizer.joblib           |
+                                           | classifier.joblib           |
+                                           | metrics.json                |
+                                           | confusion_matrix.csv        |
+                                           +-----------------------------+
+```
 
-### Create venv
+## Training Pipeline UML
+
+```text
++-----------------------------+
+| backend/train.py            |
++-------------+---------------+
+              |
+              v
++-----------------------------+
+| Kaggle phishing dataset     |
+| naserabdullahalam/...       |
++-------------+---------------+
+              |
+              v
++-----------------------------+
+| Clean and normalize text    |
+| Convert labels to 0 or 1    |
++-------------+---------------+
+              |
+              v
++-----------------------------+
+| Exclude test_data emails    |
+| Prevents training leakage   |
++-------------+---------------+
+              |
+              v
++-----------------------------+
+| Sample balanced data        |
+| 900 phishing                |
+| 900 non-phishing            |
++-------------+---------------+
+              |
+              v
++-----------------------------+
+| Split training/validation   |
+| 80% train, 20% validation   |
++-------------+---------------+
+              |
+              v
++-----------------------------+
+| TfidfVectorizer             |
+| Converts words to numbers   |
+| max_features=30000          |
+| ngram_range=(1,2)           |
++-------------+---------------+
+              |
+              v
++-----------------------------+
+| LogisticRegression          |
+| Learns phishing patterns    |
+| class_weight=balanced       |
++-------------+---------------+
+              |
+              v
++-----------------------------+
+| Save model artifacts        |
+| vectorizer.joblib           |
+| classifier.joblib           |
+| metrics.json                |
++-----------------------------+
+```
+
+## High-Level Implementation Explanation
+
+The project has three main parts:
+
+- The **Chrome Extension** is the user-facing layer. It scans Gmail or a normal webpage, extracts visible text and links, and displays the result.
+- The **FastAPI backend** is the decision engine. It receives text and links, applies rule-based phishing checks, checks domain reputation, applies allowlist/blocklist policy, and runs the trained machine learning model when available.
+- The **training pipeline** is separate from the live app. It downloads a phishing email dataset, removes test-data overlap, trains the model, and saves the model artifacts.
+
+## How Scanning Works
+
+When Gmail or a webpage changes, `extension/content.js` detects the page change and extracts visible page text and links.
+
+`extension/service_worker.js` receives the scan trigger, asks `content.js` for the page data, then sends this request to the backend:
+
+```text
+POST http://127.0.0.1:8000/predict
+```
+
+The backend returns a response like this:
+
+```json
+{
+  "label": "phishing",
+  "probability_phishing": 0.630395,
+  "flags": ["Risky words found: beneficiary, investment, transfer"]
+}
+```
+
+The popup displays:
+
+- `label`: either `phishing` or `legitimate`
+- `probability_phishing`: a score from `0.0` to `1.0`
+- `flags`: human-readable explanation of what looked suspicious
+
+If the result is medium or high risk, the extension also shows a browser notification.
+
+## How Training Occurs
+
+Training happens by running:
+
+```bash
+python backend/train.py
+```
+
+The script uses the Kaggle dataset:
+
+```text
+naserabdullahalam/phishing-email-dataset
+```
+
+The training script performs these steps:
+
+1. Loads email text and labels from the dataset.
+2. Converts labels into `1 = phishing` and `0 = legitimate`.
+3. Extracts email text from `test_data`.
+4. Removes matching test emails from the training dataset.
+5. Randomly samples `900` phishing and `900` non-phishing emails.
+6. Splits the `1800` examples into training and validation sets.
+7. Converts email text into numeric TF-IDF features.
+8. Trains a Logistic Regression classifier.
+9. Saves the trained files into `backend/artifacts`.
+
+Current saved training metrics:
+
+```text
+Training examples: 1800
+Phishing examples: 900
+Non-phishing examples: 900
+Precision: 95.48%
+Recall: 93.89%
+F1 score: 94.68%
+PR AUC: 98.56%
+Validation confusion matrix:
+actual legitimate predicted legitimate: 172
+actual legitimate predicted phishing: 8
+actual phishing predicted legitimate: 11
+actual phishing predicted phishing: 169
+```
+
+## How The Score Is Calculated
+
+There are two scoring modes.
+
+Before training, the backend has no machine learning files. It uses a deliberately weak heuristic baseline:
+
+```text
+pretraining_score = 0.15 * number_of_flags
+maximum score = 0.45
+```
+
+Because the heuristic phishing threshold is `0.50`, pretraining mode records explanations but does not overstate confidence. This makes the trained model's improvement clearer during evaluation.
+
+After training, the backend loads:
+
+```text
+backend/artifacts/vectorizer.joblib
+backend/artifacts/classifier.joblib
+```
+
+The trained model score is calculated as:
+
+```text
+probability_phishing = classifier.predict_proba(vectorized_email_text)[0][1]
+```
+
+The backend marks a page as phishing when:
+
+```text
+probability_phishing >= 0.60
+```
+
+The threshold is `0.60` instead of `0.50` because earlier testing showed that the lower threshold produced too many false positives.
+
+## Weighting And Decision Logic
+
+The pretraining heuristic baseline uses manual scoring:
+
+```text
+Each detected flag adds 0.15
+Maximum pretraining score is 0.45
+Heuristic phishing threshold is 0.50
+```
+
+The trained model uses learned weighting:
+
+```text
+TF-IDF gives importance to words and two-word phrases.
+Logistic Regression learns which words and phrases increase or decrease phishing probability.
+class_weight="balanced" prevents the model from favoring one class too strongly.
+```
+
+There are also domain policy overrides:
+
+```text
+Blocklisted domain: force phishing, score at least 0.98.
+Allowlisted clean domain: force legitimate, score at most 0.10.
+Allowlisted risky page: still warn if the ML score is high or strong phishing rules appear.
+```
+
+## How The ML Model Connects To The User
+
+The user does not directly interact with the ML model. The extension hides that complexity.
+
+```text
+User opens Gmail/email/page
+Extension extracts text and links
+Extension sends content to FastAPI
+FastAPI converts text into ML features
+ML model calculates phishing probability
+FastAPI returns label, score, and explanation flags
+Extension displays warning to user
+```
+
+## Quick Start
+
+Use the command set that matches your operating system.
+
+## macOS / Linux Setup
+
+Open Terminal.
 
 ```bash
 cd /Users/mehdisheriff/Desktop/phishing
 python3 -m venv .venv
-```
-
-### Activate venv
-
-macOS/Linux:
-```bash
 source .venv/bin/activate
-```
-
-Windows (PowerShell):
-```powershell
-.venv\Scripts\Activate.ps1
-```
-
-### Install dependencies
-
-```bash
 pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-### Deactivate when done
+Run the backend:
 
 ```bash
-deactivate
-```
-
-## 2) Train the Model
-
-Make sure your venv is active, then run:
-
-```bash
-python backend/train.py
-```
-
-What this does:
-- Downloads Kaggle dataset `naserabdullahalam/phishing-email-dataset` using `kagglehub`
-- excludes emails already present in `test_data/` so training does not reuse your evaluation emails
-- samples a balanced training pool of `900 phishing + 900 non-phishing` by default
-- trains TF-IDF + Logistic Regression
-- Computes and saves metrics:
-  - precision
-  - recall
-  - F1
-  - confusion matrix
-  - PR-AUC
-- Saves artifacts to `backend/artifacts/`:
-  - `vectorizer.joblib`
-  - `classifier.joblib`
-  - `metrics.json`
-  - `confusion_matrix.csv`
-
-Useful training options:
-
-```bash
-python backend/train.py --samples-per-class 900
-python backend/train.py --samples-per-class 900 --allow-synthetic-non-phishing
-```
-
-Notes:
-- default behavior is now aligned with evaluation safety: test emails in `test_data/` are excluded from training
-- if the Kaggle source does not contain enough non-phishing emails, training will stop with an error unless you add `--allow-synthetic-non-phishing`
-- `metrics.json` records how many test-overlap rows were excluded
-
-## 3) Pre-Training vs Trained Mode (for documentation)
-
-You can run the system in two phases:
-
-### Phase A: Pre-training (no artifacts yet)
-
-Start backend before running training:
-
-```bash
-uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
-```
-
-In this phase:
-- `/health` returns `"model_loaded": false`
-- `/predict` still works using heuristic flags only (baseline behavior)
-- response includes a flag: `Model artifacts not loaded; returning heuristic-only estimate.`
-
-This is useful to document system behavior before model training.
-
-### Phase B: Trained mode
-
-Run training:
-
-```bash
-python backend/train.py
-```
-
-Restart backend:
-
-```bash
-uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
-```
-
-Now:
-- `/health` returns `"model_loaded": true`
-- `/predict` uses TF-IDF + Logistic Regression probabilities
-
-## 4) Run Backend Locally
-
-With venv active and model artifacts present:
-
-```bash
-uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
-```
-
-Optional: enable Google Safe Browsing reputation checks:
-
-```bash
-export GOOGLE_SAFE_BROWSING_API_KEY="your_api_key_here"
-uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
+python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
 Health check:
@@ -178,7 +362,293 @@ Health check:
 curl http://127.0.0.1:8000/health
 ```
 
-Predict example:
+Stop the backend with `Control + C`.
+
+Deactivate the virtual environment:
+
+```bash
+deactivate
+```
+
+## Windows PowerShell Setup
+
+Open PowerShell in the project folder.
+
+```powershell
+cd C:\path\to\phishing
+py -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+If PowerShell blocks activation, run this once for the current user:
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+```
+
+Then activate again:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+```
+
+Run the backend:
+
+```powershell
+python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+Health check:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/health
+```
+
+Stop the backend with `Ctrl + C`.
+
+Deactivate the virtual environment:
+
+```powershell
+deactivate
+```
+
+## Windows CMD Setup
+
+Open Command Prompt in the project folder.
+
+```cmd
+cd C:\path\to\phishing
+py -m venv .venv
+.venv\Scripts\activate.bat
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+Run the backend:
+
+```cmd
+python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+Health check:
+
+```cmd
+curl http://127.0.0.1:8000/health
+```
+
+Stop the backend with `Ctrl + C`.
+
+Deactivate the virtual environment:
+
+```cmd
+deactivate
+```
+
+## Train The Model
+
+Activate your virtual environment first, then run:
+
+macOS / Linux:
+
+```bash
+python backend/train.py
+```
+
+Windows PowerShell:
+
+```powershell
+python backend/train.py
+```
+
+Windows CMD:
+
+```cmd
+python backend\train.py
+```
+
+Useful options:
+
+```bash
+python backend/train.py --samples-per-class 900
+python backend/train.py --samples-per-class 900 --allow-synthetic-non-phishing
+```
+
+Training outputs:
+
+```text
+backend/artifacts/vectorizer.joblib
+backend/artifacts/classifier.joblib
+backend/artifacts/metrics.json
+backend/artifacts/confusion_matrix.csv
+```
+
+After training, restart the backend so it loads the new model artifacts.
+
+## Run Pretraining And Post-Training Evaluation
+
+The project includes test emails under:
+
+```text
+test_data/phishing/
+test_data/non_phishing/
+```
+
+The main fixed evaluation CSV is:
+
+```text
+test_data/fixed_evaluation_log_template.csv
+```
+
+### macOS / Linux Evaluation
+
+Start the backend before training if you want to record pretraining results:
+
+```bash
+python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+In a second Terminal window:
+
+```bash
+source .venv/bin/activate
+python backend/evaluate_test_data.py --api-base-url http://127.0.0.1:8000 --evaluation-csv test_data/fixed_evaluation_log_template.csv --reset-results
+```
+
+Train the model:
+
+```bash
+python backend/train.py
+```
+
+Restart the backend, then run post-training evaluation:
+
+```bash
+python backend/evaluate_test_data.py --api-base-url http://127.0.0.1:8000 --evaluation-csv test_data/fixed_evaluation_log_template.csv
+```
+
+### Windows PowerShell Evaluation
+
+Start the backend before training:
+
+```powershell
+python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+In a second PowerShell window:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+python backend/evaluate_test_data.py --api-base-url http://127.0.0.1:8000 --evaluation-csv test_data/fixed_evaluation_log_template.csv --reset-results
+```
+
+Train the model:
+
+```powershell
+python backend/train.py
+```
+
+Restart the backend, then run post-training evaluation:
+
+```powershell
+python backend/evaluate_test_data.py --api-base-url http://127.0.0.1:8000 --evaluation-csv test_data/fixed_evaluation_log_template.csv
+```
+
+### Windows CMD Evaluation
+
+Start the backend before training:
+
+```cmd
+python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+In a second CMD window:
+
+```cmd
+.venv\Scripts\activate.bat
+python backend\evaluate_test_data.py --api-base-url http://127.0.0.1:8000 --evaluation-csv test_data\fixed_evaluation_log_template.csv --reset-results
+```
+
+Train the model:
+
+```cmd
+python backend\train.py
+```
+
+Restart the backend, then run post-training evaluation:
+
+```cmd
+python backend\evaluate_test_data.py --api-base-url http://127.0.0.1:8000 --evaluation-csv test_data\fixed_evaluation_log_template.csv
+```
+
+The current fixed evaluation result is:
+
+```text
+Pretraining accuracy: 50.00%
+Post-training accuracy: 97.50%
+```
+
+## Serve Test Emails In A Browser
+
+This is optional. It is useful if you want to manually open the test emails and see how the Chrome extension reacts.
+
+macOS / Linux:
+
+```bash
+python -m http.server 8010 --directory test_data
+```
+
+Windows PowerShell:
+
+```powershell
+python -m http.server 8010 --directory test_data
+```
+
+Windows CMD:
+
+```cmd
+python -m http.server 8010 --directory test_data
+```
+
+Then open:
+
+```text
+http://127.0.0.1:8010/
+```
+
+## Load The Chrome Extension
+
+1. Open Chrome.
+2. Go to `chrome://extensions`.
+3. Turn on **Developer mode**.
+4. Click **Load unpacked**.
+5. Select the `extension` folder inside this project.
+6. Open the extension options page.
+7. Confirm the API URL is:
+
+```text
+http://127.0.0.1:8000
+```
+
+Usage:
+
+1. Open Gmail or a test email page.
+2. Wait for the automatic scan or click the extension icon.
+3. Click **Scan Current Page** for a manual scan.
+4. Review the label, score, and flags.
+5. Use **Block Domain** if a linked domain should always warn.
+6. Use **Allow Domain** if a linked domain is trusted, while still allowing risky content to trigger warnings.
+
+## API Endpoints
+
+Health:
+
+```bash
+curl http://127.0.0.1:8000/health
+```
+
+Prediction:
 
 ```bash
 curl -X POST http://127.0.0.1:8000/predict \
@@ -189,171 +659,129 @@ curl -X POST http://127.0.0.1:8000/predict \
   }'
 ```
 
-Expected response shape:
-
-```json
-{
-  "label": "phishing",
-  "probability_phishing": 0.93,
-  "flags": ["..."]
-}
-```
-
-## 5) Reputation API (trusted/flagged domain intelligence)
-
-Create local lists:
-
-```bash
-mkdir -p backend/artifacts/reputation
-cat > backend/artifacts/reputation/trusted_domains.txt <<'EOF'
-google.com
-microsoft.com
-apple.com
-amazon.com
-paypal.com
-EOF
-
-cat > backend/artifacts/reputation/flagged_domains.txt <<'EOF'
-example-phish-domain.com
-another-malicious-domain.net
-EOF
-```
-
-Reload lists without restarting backend:
-
-```bash
-curl -X POST http://127.0.0.1:8000/reputation/reload
-```
-
-Check reputation service status:
-
-```bash
-curl http://127.0.0.1:8000/reputation/status
-```
-
-Check URLs against reputation providers:
-
-```bash
-curl -X POST http://127.0.0.1:8000/reputation/check \
-  -H "Content-Type: application/json" \
-  -d '{
-    "urls": [
-      "https://accounts.google.com",
-      "http://example-phish-domain.com/login"
-    ]
-  }'
-```
-
-`/predict` now uses this reputation layer for domain-based flags.
-
-## 6) User Preferences API
-
-Users can manage domain preferences from the extension popup:
-- `Block Domain` -> adds the main linked domain to the blocklist and forces a warning when it appears again
-- `Allow Domain` -> adds the main linked domain to the allowlist, but still warns if the page content or model score looks risky
-
-Data is persisted under:
-- `backend/artifacts/feedback/user_preferences.json`
-
-Endpoints:
+Preferences:
 
 ```bash
 curl http://127.0.0.1:8000/preferences
 curl http://127.0.0.1:8000/feedback/stats
+```
 
+Block a domain:
+
+```bash
 curl -X POST http://127.0.0.1:8000/preferences/block \
   -H "Content-Type: application/json" \
   -d '{"domain":"bad-domain.com"}'
+```
 
+Allow a domain:
+
+```bash
 curl -X POST http://127.0.0.1:8000/preferences/allow \
   -H "Content-Type: application/json" \
   -d '{"domain":"trusted-domain.com"}'
 ```
 
-## 7) Run Backend with Docker
+## Domain Reputation
 
-From project root:
+The backend can use local reputation files:
+
+```text
+backend/artifacts/reputation/trusted_domains.txt
+backend/artifacts/reputation/flagged_domains.txt
+```
+
+Reload reputation lists without restarting:
+
+```bash
+curl -X POST http://127.0.0.1:8000/reputation/reload
+```
+
+Check reputation status:
+
+```bash
+curl http://127.0.0.1:8000/reputation/status
+```
+
+Google Safe Browsing is optional. If you have an API key, set it before starting the backend.
+
+macOS / Linux:
+
+```bash
+export GOOGLE_SAFE_BROWSING_API_KEY="your_api_key_here"
+python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+Windows PowerShell:
+
+```powershell
+$env:GOOGLE_SAFE_BROWSING_API_KEY="your_api_key_here"
+python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+Windows CMD:
+
+```cmd
+set GOOGLE_SAFE_BROWSING_API_KEY=your_api_key_here
+python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+## Docker Deployment
+
+Build the backend image from the project root:
 
 ```bash
 docker build -f backend/Dockerfile -t phishing-backend .
+```
+
+Run the backend container:
+
+```bash
 docker run --rm -p 8000:8000 phishing-backend
 ```
 
-Note:
-- Ensure `backend/artifacts/vectorizer.joblib` and `backend/artifacts/classifier.joblib` exist before running container.
+Important: make sure these files exist before building or deploying the container:
 
-## 8) Load and Use Chrome Extension
-
-1. Open Chrome and go to `chrome://extensions`
-2. Enable **Developer mode**
-3. Click **Load unpacked** and select:
-   - `/Users/mehdisheriff/Desktop/phishing/extension`
-4. Open extension **Options** page and set API URL (default: `http://127.0.0.1:8000`)
-5. Open an email/webpage tab and wait for page load:
-   - extension auto-scans on launch/reload
-   - a browser notification shows the result and includes a **Scan Again** action
-6. Click extension icon and press **Scan Current Page** for manual scan at any time
-7. Popup shows:
-   - predicted `label` (`phishing` or `legitimate`)
-   - `probability_phishing`
-   - heuristic `flags`
-8. Optional actions in popup:
-   - **Block Domain**
-   - **Allow Domain**
-
-## 9) Evaluate Against `test_data` Automatically
-
-The project includes ready-made HTML test emails under:
-- `test_data/phishing/`
-- `test_data/non_phishing/`
-
-The evaluation CSV is:
-- `test_data/evaluation_log_template.csv`
-
-Recommended workflow:
-
-1. Start the backend before training:
-```bash
-uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
-```
-2. Serve the folder locally:
-```bash
-python -m http.server 8010 --directory test_data
-```
-3. Open `http://127.0.0.1:8010/` if you want to inspect the test pages in the browser.
-4. Run the standalone evaluation script:
-```bash
-python backend/evaluate_test_data.py --api-base-url http://127.0.0.1:8000
-```
-5. After baseline testing is complete, train the model:
-```bash
-python backend/train.py
-```
-6. Restart the backend and run the same evaluation script again.
-7. The same CSV will now fill the `posttraining_*` columns automatically.
-
-This is the primary evaluation path now:
-
-```bash
-python backend/evaluate_test_data.py --api-base-url http://127.0.0.1:8000
+```text
+backend/artifacts/vectorizer.joblib
+backend/artifacts/classifier.joblib
 ```
 
-What this script does:
-- reads every HTML email in `test_data/phishing/` and `test_data/non_phishing/`
-- extracts the email text and links
-- sends each email to `/predict`
-- writes the result into `test_data/evaluation_log_template.csv` through `/evaluation/log`
-- prints a simple summary at the end
+## Deployment Plan
 
-Use it twice:
-- once before training to fill the `pretraining_*` columns
-- once after training to fill the `posttraining_*` columns
+For a real deployment:
 
-## Notes
+1. Host the FastAPI backend on a service such as Render, Railway, Fly.io, AWS, Azure, or a university server.
+2. Include `vectorizer.joblib` and `classifier.joblib` with the backend deployment.
+3. Use HTTPS for the deployed backend.
+4. Change the extension API URL from `http://127.0.0.1:8000` to the deployed backend URL.
+5. Restrict CORS so only the Chrome extension can call the backend.
+6. Add production logging for predictions, errors, false positives, and false negatives.
+7. Retrain the model periodically with newer phishing and legitimate examples.
+8. Version each trained model so evaluation results can be linked to the exact model used.
+9. Package the Chrome extension and submit it to the Chrome Web Store if public release is required.
+10. Keep training data and test data separate for every retraining cycle.
 
-- The extension extracts visible text and links (`text` + `href`) from the current page.
-- The backend combines page text and links for inference.
-- If `/predict` returns errors, verify:
-  - backend is running
-  - API URL in extension options is correct
-  - model artifacts exist in `backend/artifacts/`
+## Troubleshooting
+
+If the extension shows an error:
+
+- Confirm the backend is running on `http://127.0.0.1:8000`.
+- Confirm the extension options page uses the same API URL.
+- Confirm the page is not a restricted Chrome page such as `chrome://extensions`.
+- Open `http://127.0.0.1:8000/health` and check that the API responds.
+
+If `/health` says `"model_loaded": false`:
+
+- The backend did not find model artifacts.
+- Run `python backend/train.py`.
+- Restart the backend.
+
+If PowerShell blocks virtual environment activation:
+
+- Run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
+- Then run `.\.venv\Scripts\Activate.ps1` again.
+
+## Dissertation Summary
+
+This project implements a Chrome extension that extracts email and webpage text, sends it to a FastAPI backend, combines explainable phishing rules with a trained TF-IDF Logistic Regression model, and returns a phishing probability, label, and human-readable explanation to warn users about suspicious content.

@@ -6,6 +6,7 @@ import unicodedata
 
 from .reputation import DomainReputationService, extract_domain
 
+# These words are suspicious in phishing contexts, but the code still checks patterns around them.
 PHISHING_KEYWORDS = {
     "verify",
     "urgent",
@@ -36,6 +37,7 @@ PHISHING_KEYWORDS = {
     "wire",
 }
 
+# Money scam terms help detect inheritance, beneficiary, and transfer-style phishing emails.
 MONEY_SCAM_TERMS = {
     "million",
     "usd",
@@ -47,6 +49,7 @@ MONEY_SCAM_TERMS = {
     "investment",
 }
 
+# Pressure terms capture urgency wording, which is common in phishing social engineering.
 PRESSURE_TERMS = {
     "urgent",
     "immediately",
@@ -56,6 +59,7 @@ PRESSURE_TERMS = {
     "confidential",
 }
 
+# These phrases are common in advance-fee scam emails and are stronger when money terms also appear.
 ADVANCE_FEE_MARKERS = {
     "dear sir",
     "dear madam",
@@ -70,6 +74,7 @@ ADVANCE_FEE_MARKERS = {
     "share in the ratio",
 }
 
+# Legacy footer markers catch old spam/phishing samples that include known suspicious email footers.
 LEGACY_FOOTER_MARKERS = {
     "community di yahoo mail",
     "trucchi, novita, consigli",
@@ -97,15 +102,19 @@ def _normalize_text(value: str) -> str:
 
 # Match keywords as complete words or phrases so short terms do not fire inside unrelated words.
 def _contains_keyword(text: str, keyword: str) -> bool:
+    # Phrases can be searched directly because spaces make accidental matches unlikely.
     if " " in keyword:
         return keyword in text
+    # Single words use word boundaries so "bank" does not match "embankment".
     return bool(re.search(rf"\b{re.escape(keyword)}\b", text))
 
 
 # Collect phishing keywords conservatively so a single generic word does not over-explain a safe page.
 def _find_risky_keywords(text: str) -> list[str]:
+    # Sort the matches so the same email produces stable, repeatable explanations.
     found = sorted([kw for kw in PHISHING_KEYWORDS if _contains_keyword(text, kw)])
     generic_terms = {"bank", "security", "confirm", "transaction"}
+    # A single generic business word is not enough evidence to call an email suspicious.
     if len(found) == 1 and found[0] in generic_terms:
         return []
     return found
@@ -125,6 +134,7 @@ def detect_flags(
     if found_keywords:
         flags.append(f"Risky words found: {', '.join(found_keywords[:5])}")
 
+    # Multiple money terms together are stronger evidence than one isolated financial word.
     money_hits = sum(1 for term in MONEY_SCAM_TERMS if term in text_lower)
     if money_hits >= 2:
         flags.append("Money-transfer or inheritance language found")
@@ -134,6 +144,7 @@ def detect_flags(
     if pressure_hits >= 2:
         flags.append("Pressure language found")
 
+    # Advance-fee wording must appear with money language to avoid flagging harmless formal emails.
     advance_fee_hits = sum(1 for term in ADVANCE_FEE_MARKERS if term in text_lower)
     if advance_fee_hits >= 2 and money_hits >= 1:
         flags.append("Advance-fee scam wording pattern found")
@@ -146,6 +157,7 @@ def detect_flags(
     amount_hits = 0
     for pattern in money_amount_patterns:
         amount_hits += len(re.findall(pattern, text_lower))
+    # One large money claim is enough to explain why the message deserves attention.
     if amount_hits >= 1:
         flags.append("Large money amount claim found")
 
@@ -153,22 +165,26 @@ def detect_flags(
     if re.search(r"\\b\\d{1,2}%\\s+for\\s+(me|you|us)\\b", text_lower):
         flags.append("Profit sharing percentage pattern found")
 
+    # Known legacy footers give explainable evidence for older dataset examples.
     if any(marker in text_lower for marker in LEGACY_FOOTER_MARKERS):
         flags.append("Known suspicious legacy footer marker found")
 
     # Common pattern in scam emails: asks to reply to multiple external addresses.
     email_hits = re.findall(r"[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}", text_lower)
     unique_emails = sorted(set(email_hits))
+    # Multiple contact addresses can indicate the sender is steering replies outside normal systems.
     if len(unique_emails) >= 2:
         flags.append("Multiple contact email addresses found in message")
 
     if "send your responses to" in text_lower or "reply to" in text_lower:
         flags.append("Message asks for direct reply to external email address")
 
+    # Large link counts are noisy but still useful as one weak warning signal.
     if len(links) > 20:
         flags.append("High number of links found in message")
 
     for link in links:
+        # Link evidence is checked separately because phishing often hides danger in URLs.
         href = (link.get("href") or "").strip()
         anchor_text = (link.get("text") or "").strip()
         if not href:
@@ -179,16 +195,19 @@ def detect_flags(
         if "@" in href:
             flags.append("Link contains '@' symbol in URL")
 
+        # Non-trusted HTTP links are flagged because credentials should not be sent over plain HTTP.
         if href.startswith("http://") and domain and not reputation_service.is_trusted_domain(domain):
             flags.append("At least one link uses insecure HTTP")
 
         if any(t in anchor_text.lower() for t in ["click here", "verify", "login"]):
+            # Suspicious call-to-action text matters more when it points to an untrusted domain.
             if domain and not reputation_service.is_trusted_domain(domain):
                 flags.append(f"Action link goes to untrusted site: {domain}")
 
         if len(domain) > 40 or domain.count("-") >= 3:
             flags.append(f"Domain looks unusual: {domain}")
 
+    # Reputation service adds local flagged-domain and optional Safe Browsing evidence.
     flags.extend(reputation_service.flags_for_links(links))
 
     # Deduplicate while preserving order

@@ -22,6 +22,7 @@ from .schemas import (
 
 app = FastAPI(title="Phishing Detection API", version="1.0.0")
 
+# CORS is open for local development so the unpacked Chrome extension can call the API.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -62,11 +63,13 @@ evaluation_log_store = None
 # Initialize shared services once when FastAPI starts so each request can reuse them safely.
 @app.on_event("startup")
 def startup_event() -> None:
+    # These globals behave like simple singletons for the running FastAPI process.
     global vectorizer, classifier, model_loaded, reputation_service, feedback_store, evaluation_log_store
     reputation_service = DomainReputationService()
     feedback_store = FeedbackStore()
     evaluation_log_store = EvaluationLogStore()
     try:
+        # If artifacts exist, predictions use the trained ML model.
         vectorizer, classifier = load_artifacts()
         model_loaded = True
     except FileNotFoundError:
@@ -103,6 +106,7 @@ def preferences_block(payload: DomainPreferenceRequest) -> PreferenceStateRespon
     if feedback_store is None:
         raise HTTPException(status_code=500, detail="Feedback store is not ready")
     try:
+        # The store normalizes URLs into domains before saving them.
         feedback_store.set_blocked(payload.domain)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -115,6 +119,7 @@ def preferences_allow(payload: DomainPreferenceRequest) -> PreferenceStateRespon
     if feedback_store is None:
         raise HTTPException(status_code=500, detail="Feedback store is not ready")
     try:
+        # Allowlisting is not absolute trust; risky content can still trigger a warning later.
         feedback_store.set_allowed(payload.domain)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -151,6 +156,7 @@ def evaluation_log(payload: EvaluationLogRequest) -> EvaluationLogResponse:
     if evaluation_log_store is None:
         raise HTTPException(status_code=500, detail="Evaluation log store is not ready")
     try:
+        # model_loaded determines whether the CSV writes pretraining or post-training columns.
         result = evaluation_log_store.log_prediction(
             relative_path=payload.relative_path,
             label=payload.label,
@@ -191,6 +197,7 @@ def reputation_check(payload: ReputationCheckRequest) -> ReputationCheckResponse
 
 # Count strong rule evidence so allowlisted pages can still warn when the content looks suspicious.
 def has_strong_heuristic_evidence(flags: list[str]) -> bool:
+    # Join flags into one string so each marker can be checked with a simple substring test.
     joined_flags = " | ".join(flags).lower()
     return any(marker in joined_flags for marker in STRONG_HEURISTIC_MARKERS)
 
@@ -204,14 +211,17 @@ def apply_user_domain_policy(
     blocked_domains: list[str],
     allowed_domains: list[str],
 ) -> tuple[float, str, list[str]]:
+    # Blocklist is the strongest user policy: it always warns and raises the score.
     if blocked_domains:
         flags.insert(0, f"User blocklist warning: {', '.join(blocked_domains[:3])}")
         return max(proba, 0.98), "phishing", flags
 
+    # Allowlisted domains still warn if the model or strong rules say the page looks dangerous.
     if allowed_domains and (proba >= MODEL_PHISHING_THRESHOLD or has_strong_heuristic_evidence(flags)):
         flags.insert(0, f"Allowlist caution: {', '.join(allowed_domains[:3])} is allowed, but this page still looks risky")
         return max(proba, MODEL_PHISHING_THRESHOLD), "phishing", flags
 
+    # Clean allowlisted pages are trusted to reduce false positives for known safe domains.
     if allowed_domains:
         flags.insert(0, f"User allowlist match: {', '.join(allowed_domains[:3])}")
         return min(proba, 0.10), "legitimate", flags
@@ -227,16 +237,19 @@ def predict(payload: PredictRequest) -> PredictResponse:
     if feedback_store is None:
         raise HTTPException(status_code=500, detail="Feedback store is not ready")
 
+    # Link text and URLs are merged with visible text because phishing clues can appear in either place.
     link_parts = [f"{item.text} {item.href}" for item in payload.links]
     full_text = f"{payload.visible_text} {' '.join(link_parts)}".strip()
     if not full_text:
         raise HTTPException(status_code=400, detail="No text content available for prediction")
 
+    # Rule flags provide human-readable explanations even when the ML model supplies the score.
     flags = detect_flags(
         visible_text=payload.visible_text,
         links=[{"text": item.text, "href": item.href} for item in payload.links],
         reputation_service=reputation_service,
     )
+    # Preferences are applied only to domains that actually appear in the scanned links.
     link_domains = [extract_domain(item.href) for item in payload.links if item.href]
     blocked_domains = sorted({d for d in link_domains if d and feedback_store.is_blocked(d)})
     allowed_domains = sorted({d for d in link_domains if d and feedback_store.is_allowed(d)})
@@ -247,6 +260,7 @@ def predict(payload: PredictRequest) -> PredictResponse:
         proba = simple_score
         label = "phishing" if proba >= HEURISTIC_PHISHING_THRESHOLD else "legitimate"
 
+        # User domain policy still works before training, which helps extension demos.
         proba, label, flags = apply_user_domain_policy(
             proba=proba,
             label=label,
@@ -255,6 +269,7 @@ def predict(payload: PredictRequest) -> PredictResponse:
             allowed_domains=allowed_domains,
         )
 
+        # The first flag makes the CSV and popup clear that this was not an ML prediction.
         fallback_flags = [
             "Model files not loaded; using simple rule score only.",
             *flags,
@@ -265,10 +280,12 @@ def predict(payload: PredictRequest) -> PredictResponse:
             flags=fallback_flags[:10],
         )
 
+    # The vectorizer converts raw email text into the same numeric features used during training.
     features = vectorizer.transform([full_text])
     proba = float(classifier.predict_proba(features)[0][1])
     label = "phishing" if proba >= MODEL_PHISHING_THRESHOLD else "legitimate"
 
+    # After ML scoring, domain policy can still override based on user allowlist/blocklist choices.
     proba, label, flags = apply_user_domain_policy(
         proba=proba,
         label=label,

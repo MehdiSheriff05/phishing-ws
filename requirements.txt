@@ -1,7 +1,14 @@
+# FastAPI serves the prediction API used by the Chrome extension.
 fastapi==0.116.1
+
+# Uvicorn runs the FastAPI app during local development and deployment.
 uvicorn[standard]==0.35.0
+
+# scikit-learn, pandas, numpy, and joblib power training and saved model inference.
 scikit-learn==1.7.1
 pandas==2.2.3
 numpy==2.1.3
 joblib==1.5.1
+
+# kagglehub downloads the phishing email dataset used for model training.
 kagglehub[pandas-datasets]==1.0.0
