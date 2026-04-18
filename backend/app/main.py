@@ -10,7 +10,6 @@ from .model_io import load_artifacts
 from .reputation import DomainReputationService, extract_domain
 from .schemas import (
     DomainPreferenceRequest,
-    EmailFeedbackRequest,
     EvaluationLogRequest,
     EvaluationLogResponse,
     FeedbackStatsResponse,
@@ -31,6 +30,27 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# The model threshold is deliberately above 0.50 because earlier tests showed too many false positives.
+MODEL_PHISHING_THRESHOLD = 0.60
+
+# The heuristic threshold keeps the pretraining baseline explainable without overreacting to one weak flag.
+HEURISTIC_PHISHING_THRESHOLD = 0.50
+
+# These markers indicate rule evidence that should still warn users even for allowlisted domains.
+STRONG_HEURISTIC_MARKERS = (
+    "blocklist",
+    "known bad domain",
+    "money-transfer",
+    "inheritance",
+    "advance-fee",
+    "pressure language",
+    "external email",
+    "multiple contact email",
+    "insecure http",
+    "untrusted site",
+    "@' symbol",
+)
+
 vectorizer = None
 classifier = None
 model_loaded = False
@@ -39,6 +59,7 @@ feedback_store = None
 evaluation_log_store = None
 
 
+# Initialize shared services once when FastAPI starts so each request can reuse them safely.
 @app.on_event("startup")
 def startup_event() -> None:
     global vectorizer, classifier, model_loaded, reputation_service, feedback_store, evaluation_log_store
@@ -53,11 +74,13 @@ def startup_event() -> None:
         model_loaded = False
 
 
+# Return basic runtime status for scripts and the extension before running predictions.
 @app.get("/health")
 def health() -> dict[str, str | bool]:
     return {"status": "ok", "model_loaded": model_loaded}
 
 
+# Return the current allowlist and blocklist so the UI can explain user-specific behavior.
 @app.get("/preferences", response_model=PreferenceStateResponse)
 def get_preferences() -> PreferenceStateResponse:
     if feedback_store is None:
@@ -66,6 +89,7 @@ def get_preferences() -> PreferenceStateResponse:
     return PreferenceStateResponse(**prefs)
 
 
+# Expose feedback counts and storage paths for debugging and project demonstrations.
 @app.get("/feedback/stats", response_model=FeedbackStatsResponse)
 def feedback_stats() -> FeedbackStatsResponse:
     if feedback_store is None:
@@ -73,6 +97,7 @@ def feedback_stats() -> FeedbackStatsResponse:
     return FeedbackStatsResponse(**feedback_store.stats())
 
 
+# Add a domain to the blocklist; blocked domains always force a phishing warning.
 @app.post("/preferences/block", response_model=PreferenceStateResponse)
 def preferences_block(payload: DomainPreferenceRequest) -> PreferenceStateResponse:
     if feedback_store is None:
@@ -84,6 +109,7 @@ def preferences_block(payload: DomainPreferenceRequest) -> PreferenceStateRespon
     return PreferenceStateResponse(**feedback_store.get_preferences())
 
 
+# Add a domain to the allowlist; allowlisting reduces risk only when content is otherwise clean.
 @app.post("/preferences/allow", response_model=PreferenceStateResponse)
 def preferences_allow(payload: DomainPreferenceRequest) -> PreferenceStateResponse:
     if feedback_store is None:
@@ -95,6 +121,7 @@ def preferences_allow(payload: DomainPreferenceRequest) -> PreferenceStateRespon
     return PreferenceStateResponse(**feedback_store.get_preferences())
 
 
+# Remove a domain from the blocklist when the user no longer wants forced warnings.
 @app.post("/preferences/unblock", response_model=PreferenceStateResponse)
 def preferences_unblock(payload: DomainPreferenceRequest) -> PreferenceStateResponse:
     if feedback_store is None:
@@ -106,6 +133,7 @@ def preferences_unblock(payload: DomainPreferenceRequest) -> PreferenceStateResp
     return PreferenceStateResponse(**feedback_store.get_preferences())
 
 
+# Remove a domain from the allowlist so future scans use the normal risk decision path again.
 @app.post("/preferences/unallow", response_model=PreferenceStateResponse)
 def preferences_unallow(payload: DomainPreferenceRequest) -> PreferenceStateResponse:
     if feedback_store is None:
@@ -117,36 +145,7 @@ def preferences_unallow(payload: DomainPreferenceRequest) -> PreferenceStateResp
     return PreferenceStateResponse(**feedback_store.get_preferences())
 
 
-@app.post("/feedback/report-spam")
-def report_spam(payload: EmailFeedbackRequest) -> dict[str, object]:
-    if feedback_store is None:
-        raise HTTPException(status_code=500, detail="Feedback store is not ready")
-    try:
-        return feedback_store.record_feedback(
-            visible_text=payload.visible_text,
-            links=[{"text": item.text, "href": item.href} for item in payload.links],
-            user_label=1,
-            source=payload.source,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@app.post("/feedback/report-not-spam")
-def report_not_spam(payload: EmailFeedbackRequest) -> dict[str, object]:
-    if feedback_store is None:
-        raise HTTPException(status_code=500, detail="Feedback store is not ready")
-    try:
-        return feedback_store.record_feedback(
-            visible_text=payload.visible_text,
-            links=[{"text": item.text, "href": item.href} for item in payload.links],
-            user_label=0,
-            source=payload.source,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
+# Log evaluation results from the standalone test script into the CSV used for the dissertation.
 @app.post("/evaluation/log", response_model=EvaluationLogResponse)
 def evaluation_log(payload: EvaluationLogRequest) -> EvaluationLogResponse:
     if evaluation_log_store is None:
@@ -164,6 +163,7 @@ def evaluation_log(payload: EvaluationLogRequest) -> EvaluationLogResponse:
     return EvaluationLogResponse(**result)
 
 
+# Show which local and optional external reputation sources are active.
 @app.get("/reputation/status")
 def reputation_status() -> dict[str, object]:
     if reputation_service is None:
@@ -171,6 +171,7 @@ def reputation_status() -> dict[str, object]:
     return reputation_service.status()
 
 
+# Reload domain reputation files without restarting the backend during a demo.
 @app.post("/reputation/reload")
 def reputation_reload() -> dict[str, object]:
     if reputation_service is None:
@@ -179,6 +180,7 @@ def reputation_reload() -> dict[str, object]:
     return {"status": "reloaded", **reputation_service.status()}
 
 
+# Check arbitrary URLs against local reputation lists and optional Google Safe Browsing.
 @app.post("/reputation/check", response_model=ReputationCheckResponse)
 def reputation_check(payload: ReputationCheckRequest) -> ReputationCheckResponse:
     if reputation_service is None:
@@ -187,6 +189,37 @@ def reputation_check(payload: ReputationCheckRequest) -> ReputationCheckResponse
     return ReputationCheckResponse(results=results)
 
 
+# Count strong rule evidence so allowlisted pages can still warn when the content looks suspicious.
+def has_strong_heuristic_evidence(flags: list[str]) -> bool:
+    joined_flags = " | ".join(flags).lower()
+    return any(marker in joined_flags for marker in STRONG_HEURISTIC_MARKERS)
+
+
+# Apply blocklist and allowlist policy after the base score has been computed.
+def apply_user_domain_policy(
+    *,
+    proba: float,
+    label: str,
+    flags: list[str],
+    blocked_domains: list[str],
+    allowed_domains: list[str],
+) -> tuple[float, str, list[str]]:
+    if blocked_domains:
+        flags.insert(0, f"User blocklist warning: {', '.join(blocked_domains[:3])}")
+        return max(proba, 0.98), "phishing", flags
+
+    if allowed_domains and (proba >= MODEL_PHISHING_THRESHOLD or has_strong_heuristic_evidence(flags)):
+        flags.insert(0, f"Allowlist caution: {', '.join(allowed_domains[:3])} is allowed, but this page still looks risky")
+        return max(proba, MODEL_PHISHING_THRESHOLD), "phishing", flags
+
+    if allowed_domains:
+        flags.insert(0, f"User allowlist match: {', '.join(allowed_domains[:3])}")
+        return min(proba, 0.10), "legitimate", flags
+
+    return proba, label, flags
+
+
+# Predict phishing risk for text and links extracted by the extension or evaluation script.
 @app.post("/predict", response_model=PredictResponse)
 def predict(payload: PredictRequest) -> PredictResponse:
     if reputation_service is None:
@@ -212,16 +245,15 @@ def predict(payload: PredictRequest) -> PredictResponse:
         # In pre-training mode, treat each independent rule hit as a stronger signal.
         simple_score = min(0.95, 0.25 * len(flags))
         proba = simple_score
-        label = "phishing" if proba >= 0.5 else "legitimate"
+        label = "phishing" if proba >= HEURISTIC_PHISHING_THRESHOLD else "legitimate"
 
-        if blocked_domains:
-            proba = max(proba, 0.95)
-            label = "phishing"
-            flags.insert(0, f"User blocklist match: {', '.join(blocked_domains[:3])}")
-        elif allowed_domains:
-            proba = min(proba, 0.15)
-            label = "legitimate"
-            flags.insert(0, f"User allowlist match: {', '.join(allowed_domains[:3])}")
+        proba, label, flags = apply_user_domain_policy(
+            proba=proba,
+            label=label,
+            flags=flags,
+            blocked_domains=blocked_domains,
+            allowed_domains=allowed_domains,
+        )
 
         fallback_flags = [
             "Model files not loaded; using simple rule score only.",
@@ -235,15 +267,15 @@ def predict(payload: PredictRequest) -> PredictResponse:
 
     features = vectorizer.transform([full_text])
     proba = float(classifier.predict_proba(features)[0][1])
-    label = "phishing" if proba >= 0.5 else "legitimate"
-    if blocked_domains:
-        proba = max(proba, 0.98)
-        label = "phishing"
-        flags.insert(0, f"User blocklist match: {', '.join(blocked_domains[:3])}")
-    elif allowed_domains:
-        proba = min(proba, 0.10)
-        label = "legitimate"
-        flags.insert(0, f"User allowlist match: {', '.join(allowed_domains[:3])}")
+    label = "phishing" if proba >= MODEL_PHISHING_THRESHOLD else "legitimate"
+
+    proba, label, flags = apply_user_domain_policy(
+        proba=proba,
+        label=label,
+        flags=flags,
+        blocked_domains=blocked_domains,
+        allowed_domains=allowed_domains,
+    )
 
     return PredictResponse(
         label=label,

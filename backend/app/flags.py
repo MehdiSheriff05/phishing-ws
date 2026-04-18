@@ -84,6 +84,7 @@ LEGACY_FOOTER_MARKERS = {
 }
 
 
+# Normalize email text before rule checks so the rules compare consistent lowercase text.
 def _normalize_text(value: str) -> str:
     decoded = html.unescape(value or "")
     lowered = decoded.lower()
@@ -94,6 +95,23 @@ def _normalize_text(value: str) -> str:
     return " ".join(no_accents.split())
 
 
+# Match keywords as complete words or phrases so short terms do not fire inside unrelated words.
+def _contains_keyword(text: str, keyword: str) -> bool:
+    if " " in keyword:
+        return keyword in text
+    return bool(re.search(rf"\b{re.escape(keyword)}\b", text))
+
+
+# Collect phishing keywords conservatively so a single generic word does not over-explain a safe page.
+def _find_risky_keywords(text: str) -> list[str]:
+    found = sorted([kw for kw in PHISHING_KEYWORDS if _contains_keyword(text, kw)])
+    generic_terms = {"bank", "security", "confirm", "transaction"}
+    if len(found) == 1 and found[0] in generic_terms:
+        return []
+    return found
+
+
+# Run the human-readable heuristic checks that support both pretraining and trained predictions.
 def detect_flags(
     visible_text: str,
     links: list[dict[str, str]],
@@ -102,7 +120,8 @@ def detect_flags(
     flags: list[str] = []
     text_lower = _normalize_text(visible_text)
 
-    found_keywords = sorted([kw for kw in PHISHING_KEYWORDS if kw in text_lower])
+    # Keyword flags explain suspicious wording, but are not enough by themselves to prove phishing.
+    found_keywords = _find_risky_keywords(text_lower)
     if found_keywords:
         flags.append(f"Risky words found: {', '.join(found_keywords[:5])}")
 
@@ -110,6 +129,7 @@ def detect_flags(
     if money_hits >= 2:
         flags.append("Money-transfer or inheritance language found")
 
+    # Pressure wording matters most when multiple urgency terms appear together.
     pressure_hits = sum(1 for term in PRESSURE_TERMS if term in text_lower)
     if pressure_hits >= 2:
         flags.append("Pressure language found")
@@ -154,11 +174,12 @@ def detect_flags(
         if not href:
             continue
 
+        # Link checks use the normalized domain so trusted domains avoid noisy link warnings.
         domain = extract_domain(href)
         if "@" in href:
             flags.append("Link contains '@' symbol in URL")
 
-        if href.startswith("http://"):
+        if href.startswith("http://") and domain and not reputation_service.is_trusted_domain(domain):
             flags.append("At least one link uses insecure HTTP")
 
         if any(t in anchor_text.lower() for t in ["click here", "verify", "login"]):

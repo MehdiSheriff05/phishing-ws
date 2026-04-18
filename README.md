@@ -1,7 +1,7 @@
 # Undergraduate Phishing Email Detection System
 
 This project includes:
-- `backend/`: FastAPI service for prediction, evaluation logging, feedback, and model training
+- `backend/`: FastAPI service for prediction, evaluation logging, domain preferences, and model training
 - `extension/`: Chrome Extension (Manifest V3) that extracts visible text and links, then calls the FastAPI `/predict` endpoint
 
 The system works in two phases:
@@ -113,13 +113,11 @@ Useful training options:
 ```bash
 python backend/train.py --samples-per-class 900
 python backend/train.py --samples-per-class 900 --allow-synthetic-non-phishing
-python backend/train.py --samples-per-class 900 --include-feedback
 ```
 
 Notes:
 - default behavior is now aligned with evaluation safety: test emails in `test_data/` are excluded from training
 - if the Kaggle source does not contain enough non-phishing emails, training will stop with an error unless you add `--allow-synthetic-non-phishing`
-- `--include-feedback` is optional and off by default
 - `metrics.json` records how many test-overlap rows were excluded
 
 ## 3) Pre-Training vs Trained Mode (for documentation)
@@ -248,18 +246,14 @@ curl -X POST http://127.0.0.1:8000/reputation/check \
 
 `/predict` now uses this reputation layer for domain-based flags.
 
-## 6) User Feedback + Preferences API
+## 6) User Preferences API
 
-Users can provide feedback from the extension popup:
-- `Report Spam` -> stores a phishing-labeled training example
-- `Report Not Spam` -> stores a legitimate-labeled training example
-- `Block Domain` -> adds domain to user blocklist (forces high phishing risk)
-- `Allow Domain` -> adds domain to user allowlist (reduces phishing risk)
+Users can manage domain preferences from the extension popup:
+- `Block Domain` -> adds the main linked domain to the blocklist and forces a warning when it appears again
+- `Allow Domain` -> adds the main linked domain to the allowlist, but still warns if the page content or model score looks risky
 
 Data is persisted under:
 - `backend/artifacts/feedback/user_preferences.json`
-- `backend/artifacts/feedback/feedback_events.jsonl`
-- `backend/artifacts/feedback/training_feedback.csv`
 
 Endpoints:
 
@@ -274,23 +268,7 @@ curl -X POST http://127.0.0.1:8000/preferences/block \
 curl -X POST http://127.0.0.1:8000/preferences/allow \
   -H "Content-Type: application/json" \
   -d '{"domain":"trusted-domain.com"}'
-
-curl -X POST http://127.0.0.1:8000/feedback/report-spam \
-  -H "Content-Type: application/json" \
-  -d '{"visible_text":"urgent verify account","links":[{"text":"Verify","href":"http://bad-domain.com"}],"source":"manual_test"}'
-
-curl -X POST http://127.0.0.1:8000/feedback/report-not-spam \
-  -H "Content-Type: application/json" \
-  -d '{"visible_text":"team meeting at 2pm","links":[],"source":"manual_test"}'
 ```
-
-### Retraining with user feedback
-
-`python backend/train.py --include-feedback` merges:
-- base Kaggle dataset sample
-- user feedback examples from `backend/artifacts/feedback/training_feedback.csv`
-
-So the model gradually adapts when you retrain periodically.
 
 ## 7) Run Backend with Docker
 
@@ -320,8 +298,6 @@ Note:
    - `probability_phishing`
    - heuristic `flags`
 8. Optional actions in popup:
-   - **Report Spam**
-   - **Report Not Spam**
    - **Block Domain**
    - **Allow Domain**
 

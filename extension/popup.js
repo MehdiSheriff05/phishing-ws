@@ -2,14 +2,14 @@ const scanBtn = document.getElementById("scanBtn");
 const statusEl = document.getElementById("status");
 const resultEl = document.getElementById("result");
 const resultContentEl = document.getElementById("resultContent");
-const reportSpamBtn = document.getElementById("reportSpamBtn");
-const reportNotSpamBtn = document.getElementById("reportNotSpamBtn");
 const blockDomainBtn = document.getElementById("blockDomainBtn");
 const allowDomainBtn = document.getElementById("allowDomainBtn");
 
+// These variables keep the latest scan available for the allowlist and blocklist buttons.
 let lastScanPayload = null;
 let lastPrediction = null;
 
+// Read the currently selected browser tab so scans target the page the user is viewing.
 function getActiveTabInfo() {
   return new Promise((resolve, reject) => {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
@@ -26,6 +26,7 @@ function getActiveTabInfo() {
   });
 }
 
+// Read the backend URL from extension storage, falling back to the local FastAPI server.
 function getApiBaseUrl() {
   return new Promise((resolve) => {
     chrome.storage.sync.get(["apiBaseUrl"], (result) => {
@@ -34,6 +35,7 @@ function getApiBaseUrl() {
   });
 }
 
+// Send a JSON POST request to FastAPI for actions such as blocklisting and allowlisting.
 async function apiPost(path, body) {
   const apiBaseUrl = await getApiBaseUrl();
   const response = await fetch(`${apiBaseUrl}${path}`, {
@@ -47,6 +49,7 @@ async function apiPost(path, body) {
   return response.json();
 }
 
+// Find the first link domain in the scanned page because preferences are domain-based.
 function extractPrimaryDomainFromPayload(payload) {
   if (!payload?.links?.length) return "";
   for (const link of payload.links) {
@@ -64,6 +67,7 @@ function extractPrimaryDomainFromPayload(payload) {
   return "";
 }
 
+// Show the prediction result in the popup using the label, probability, and backend flags.
 function renderResult(data) {
   const probValue = Number(data.probability_phishing || 0).toFixed(2);
   const labelClass = data.label === "phishing" ? "phishing" : "legitimate";
@@ -81,6 +85,7 @@ function renderResult(data) {
   resultEl.hidden = false;
 }
 
+// Store a scan response locally so follow-up actions operate on the same scanned page.
 function handleScanResponse(response, successStatus = "Scan complete.") {
   if (chrome.runtime.lastError) {
     statusEl.textContent = `Error: ${chrome.runtime.lastError.message}`;
@@ -105,6 +110,7 @@ function handleScanResponse(response, successStatus = "Scan complete.") {
   renderResult(lastPrediction);
 }
 
+// Ask the background service worker to scan the current tab and return the prediction.
 function requestScan(tabInfo, { preferCached = false, successStatus = "Scan complete." } = {}) {
   return new Promise((resolve, reject) => {
     chrome.runtime.sendMessage(
@@ -125,6 +131,7 @@ function requestScan(tabInfo, { preferCached = false, successStatus = "Scan comp
   });
 }
 
+// Load a cached auto-scan result quickly, then refresh so Gmail/page changes do not show stale results.
 async function loadAutoScanResult() {
   let tabInfo;
   try {
@@ -152,6 +159,7 @@ async function loadAutoScanResult() {
   } catch (_) {}
 }
 
+// Manual scans always request fresh page content instead of reusing stale cached data.
 scanBtn.addEventListener("click", async () => {
   statusEl.textContent = "Scanning...";
   resultEl.hidden = true;
@@ -175,40 +183,7 @@ scanBtn.addEventListener("click", async () => {
   }
 });
 
-reportSpamBtn.addEventListener("click", async () => {
-  if (!lastScanPayload) {
-    statusEl.textContent = "Run a scan first.";
-    return;
-  }
-  try {
-    await apiPost("/feedback/report-spam", {
-      visible_text: lastScanPayload.visible_text || "",
-      links: lastScanPayload.links || [],
-      source: "extension_popup"
-    });
-    statusEl.textContent = "Saved: marked as spam.";
-  } catch (error) {
-    statusEl.textContent = `Error: ${error.message || error}`;
-  }
-});
-
-reportNotSpamBtn.addEventListener("click", async () => {
-  if (!lastScanPayload) {
-    statusEl.textContent = "Run a scan first.";
-    return;
-  }
-  try {
-    await apiPost("/feedback/report-not-spam", {
-      visible_text: lastScanPayload.visible_text || "",
-      links: lastScanPayload.links || [],
-      source: "extension_popup"
-    });
-    statusEl.textContent = "Saved: marked as not spam.";
-  } catch (error) {
-    statusEl.textContent = `Error: ${error.message || error}`;
-  }
-});
-
+// Blocklisting tells the backend to force a warning whenever this linked domain appears again.
 blockDomainBtn.addEventListener("click", async () => {
   const domain = extractPrimaryDomainFromPayload(lastScanPayload);
   if (!domain) {
@@ -223,6 +198,7 @@ blockDomainBtn.addEventListener("click", async () => {
   }
 });
 
+// Allowlisting lowers risk for clean pages, but the backend still warns if content looks phishing-like.
 allowDomainBtn.addEventListener("click", async () => {
   const domain = extractPrimaryDomainFromPayload(lastScanPayload);
   if (!domain) {
@@ -237,4 +213,5 @@ allowDomainBtn.addEventListener("click", async () => {
   }
 });
 
+// Start with the latest auto-scan result so the popup has useful information immediately.
 loadAutoScanResult();

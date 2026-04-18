@@ -2,12 +2,13 @@ const DEFAULT_API_BASE_URL = "http://127.0.0.1:8000";
 const lastScanAtByTab = new Map();
 const AUTO_SCAN_DEBOUNCE_MS = 1200;
 const NOTIF_ID_PREFIX = "scan-result-";
-const LIKELY_PHISHING_THRESHOLD = 0.5;
+const LIKELY_PHISHING_THRESHOLD = 0.6;
 const LAST_SCAN_STORAGE_PREFIX = "lastScanResult:";
 const LOW_CONTENT_TEXT_LEN = 80;
 const LOW_CONTENT_LINK_COUNT = 2;
 const FRESH_SCAN_WINDOW_MS = 15000;
 
+// Read the FastAPI base URL from Chrome storage so the extension can work in local demos.
 function getApiBaseUrl() {
   return new Promise((resolve) => {
     chrome.storage.sync.get(["apiBaseUrl"], (result) => {
@@ -16,6 +17,7 @@ function getApiBaseUrl() {
   });
 }
 
+// Find the active browser tab because manual scans should scan what the user is viewing.
 function getActiveTab() {
   return new Promise((resolve, reject) => {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
@@ -32,6 +34,7 @@ function getActiveTab() {
   });
 }
 
+// Avoid Chrome-internal pages because extensions cannot inject normal content scripts there.
 function isRestrictedUrl(url) {
   if (!url) return true;
   return (
@@ -43,6 +46,7 @@ function isRestrictedUrl(url) {
   );
 }
 
+// Inject the content script on demand when Chrome has not already loaded it into the tab.
 function injectContentScript(tabId) {
   return new Promise((resolve, reject) => {
     chrome.scripting.executeScript(
@@ -61,6 +65,7 @@ function injectContentScript(tabId) {
   });
 }
 
+// Ask content.js to extract visible text and links from the page before calling the API.
 function requestPageData(tabId) {
   return new Promise((resolve, reject) => {
     chrome.tabs.sendMessage(tabId, { type: "EXTRACT_EMAIL_DATA" }, (response) => {
@@ -77,6 +82,7 @@ function requestPageData(tabId) {
   });
 }
 
+// Run a full scan for one tab: collect page data, call FastAPI, and return the prediction.
 async function runScanForTab(tabId) {
   const tab = await new Promise((resolve, reject) => {
     chrome.tabs.get(tabId, (result) => {
@@ -127,11 +133,13 @@ async function runScanForTab(tabId) {
   return { prediction, payload, tabUrl: tab.url || "" };
 }
 
+// Convenience wrapper used by notification actions when the active tab should be rescanned.
 async function scanCurrentPage() {
   const tab = await getActiveTab();
   return runScanForTab(tab.id);
 }
 
+// Retrieve a recent scan result so the popup can show immediate context while refreshing.
 function getStoredScanForTab(tabId, pageUrl = "") {
   return new Promise((resolve) => {
     const key = `${LAST_SCAN_STORAGE_PREFIX}${tabId}`;
@@ -155,6 +163,15 @@ function getStoredScanForTab(tabId, pageUrl = "") {
   });
 }
 
+// Choose a clearer notification title for blocklist and allowlist risk cases.
+function getNotificationTitle(prediction) {
+  const flags = (prediction.flags || []).join(" ").toLowerCase();
+  if (flags.includes("blocklist warning")) return "Blocked Site Warning";
+  if (flags.includes("allowlist caution")) return "Allowlisted Site Looks Risky";
+  return "Phishing Scan Complete";
+}
+
+// Display a browser notification when the scan detects medium or high phishing risk.
 function showScanNotification(scanResult) {
   const prediction = scanResult.prediction || scanResult;
   const probability = Number(prediction.probability_phishing || 0).toFixed(2);
@@ -168,12 +185,13 @@ function showScanNotification(scanResult) {
   chrome.notifications.create(`${NOTIF_ID_PREFIX}${Date.now()}`, {
     type: "basic",
     iconUrl: "icon128.png",
-    title: "Phishing Scan Complete",
+    title: getNotificationTitle(prediction),
     message,
     buttons: [{ title: "Scan Again" }]
   });
 }
 
+// Save the last result and update the extension badge so users see risk without opening the popup.
 function saveLastScanResult(tabId, scanResult, pageUrl = "") {
   const prediction = scanResult.prediction || scanResult;
   const payload = scanResult.payload || {};
@@ -193,17 +211,20 @@ function saveLastScanResult(tabId, scanResult, pageUrl = "") {
   chrome.action.setBadgeBackgroundColor({ tabId, color: prediction.label === "phishing" ? "#B91C1C" : "#0F766E" });
 }
 
+// Convert the probability score into display-friendly risk levels.
 function getRiskLevel(probabilityPhishing) {
   if (probabilityPhishing >= 0.75) return "high";
   if (probabilityPhishing >= LIKELY_PHISHING_THRESHOLD) return "medium";
   return "low";
 }
 
+// Treat either an explicit phishing label or a high probability as a warning-worthy result.
 function isLikelyPhishing(prediction) {
   if (!prediction) return false;
   return prediction.label === "phishing" || (prediction.probability_phishing || 0) >= LIKELY_PHISHING_THRESHOLD;
 }
 
+// Automatically scan page changes while avoiding repeated scans during fast Gmail updates.
 function maybeAutoScan(tabId, _reason = "event") {
   const now = Date.now();
   const previous = lastScanAtByTab.get(tabId) || 0;
@@ -230,6 +251,7 @@ function maybeAutoScan(tabId, _reason = "event") {
     });
 }
 
+// Route messages from popup.js and content.js into scan, cache, and auto-scan operations.
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === "SCAN_CURRENT_PAGE") {
     const requestedTabId = Number(message.tabId || 0);
@@ -291,6 +313,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   return false;
 });
 
+// Let users click the notification button to immediately rescan the active page.
 chrome.notifications.onButtonClicked.addListener(async (_notificationId, buttonIndex) => {
   if (buttonIndex !== 0) {
     return;
@@ -304,6 +327,7 @@ chrome.notifications.onButtonClicked.addListener(async (_notificationId, buttonI
   }
 });
 
+// Scan completed page loads so warnings appear without requiring the popup.
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status !== "complete") {
     return;
@@ -314,10 +338,12 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   maybeAutoScan(tabId, "tab_updated");
 });
 
+// Scan when users switch tabs because the visible page has changed.
 chrome.tabs.onActivated.addListener(({ tabId }) => {
   maybeAutoScan(tabId, "tab_activated");
 });
 
+// Scan normal navigations, including webmail page loads.
 chrome.webNavigation.onCompleted.addListener((details) => {
   if (details.frameId !== 0) {
     return;
@@ -325,6 +351,7 @@ chrome.webNavigation.onCompleted.addListener((details) => {
   maybeAutoScan(details.tabId, "webnav_completed");
 });
 
+// Scan single-page-app route changes, which is important for Gmail message navigation.
 chrome.webNavigation.onHistoryStateUpdated.addListener((details) => {
   if (details.frameId !== 0) {
     return;

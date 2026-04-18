@@ -54,12 +54,6 @@ class DomainPreferenceRequest(BaseModel):
     domain: str = Field(min_length=1)
 
 
-class EmailFeedbackRequest(BaseModel):
-    visible_text: str = ""
-    links: list[LinkItem] = Field(default_factory=list)
-    source: str = "extension"
-
-
 class PreferenceStateResponse(BaseModel):
     allowlist: list[str]
     blocklist: list[str]

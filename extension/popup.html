@@ -67,6 +67,12 @@
         padding: 8px;
         font-size: 12px;
       }
+      .hint {
+        color: #4b5563;
+        font-size: 12px;
+        line-height: 1.35;
+        margin-top: 8px;
+      }
     </style>
   </head>
   <body>
@@ -75,9 +81,8 @@
     <div id="status"></div>
     <div id="result" class="result" hidden>
       <div id="resultContent"></div>
+      <div class="hint">Use these buttons only when you trust or distrust the main linked domain on this page.</div>
       <div class="actions">
-        <button id="reportSpamBtn">Report Spam</button>
-        <button id="reportNotSpamBtn">Report Not Spam</button>
         <button id="blockDomainBtn">Block Domain</button>
         <button id="allowDomainBtn">Allow Domain</button>
       </div>

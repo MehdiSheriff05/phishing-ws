@@ -1,12 +1,15 @@
+// Check whether an element is visible so hidden menu text does not pollute scan input.
 function isVisible(element) {
   const style = window.getComputedStyle(element);
   return style && style.display !== "none" && style.visibility !== "hidden";
 }
 
+// Detect Gmail because Gmail needs a smaller scan root than normal websites.
 function isGmailPage() {
   return window.location.hostname === "mail.google.com";
 }
 
+// Find the currently opened Gmail message body instead of scanning the full Gmail shell.
 function getGmailScanRoot() {
   const selectors = [
     "div[role='main'] .a3s.aiL",
@@ -36,6 +39,7 @@ function getGmailScanRoot() {
   return document.body;
 }
 
+// Choose the best page section to scan for the current website.
 function getScanRoot() {
   if (isGmailPage()) {
     return getGmailScanRoot();
@@ -43,6 +47,7 @@ function getScanRoot() {
   return document.body;
 }
 
+// Extract readable text from leaf nodes so the backend receives email-like content.
 function extractVisibleText(root = document.body) {
   const nodes = Array.from(root.querySelectorAll("*"));
   const chunks = [];
@@ -60,6 +65,7 @@ function extractVisibleText(root = document.body) {
   return chunks.join(" ").slice(0, 20000);
 }
 
+// Extract links separately because phishing checks need both anchor text and destination URL.
 function extractLinks(root = document.body) {
   return Array.from(root.querySelectorAll("a[href]"))
     .map((a) => ({
@@ -70,6 +76,7 @@ function extractLinks(root = document.body) {
     .slice(0, 200);
 }
 
+// Build a compact page fingerprint so Gmail single-page navigation can trigger rescans.
 function getPageFingerprint() {
   const title = document.title || "";
   const url = window.location.href || "";
@@ -84,6 +91,7 @@ function getPageFingerprint() {
 let lastFingerprint = "";
 let scanTriggerTimer = null;
 
+// Debounce scan triggers because Gmail updates the DOM many times for one message open.
 function queueAutoScanTrigger() {
   if (scanTriggerTimer) {
     clearTimeout(scanTriggerTimer);
@@ -93,6 +101,7 @@ function queueAutoScanTrigger() {
   }, 900);
 }
 
+// Compare fingerprints and trigger an auto-scan only when visible page state changes.
 function checkPageStateChange() {
   const fingerprint = getPageFingerprint();
   if (fingerprint !== lastFingerprint) {
@@ -101,6 +110,7 @@ function checkPageStateChange() {
   }
 }
 
+// Respond to the background worker with the current page text and links.
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === "EXTRACT_EMAIL_DATA") {
     try {
