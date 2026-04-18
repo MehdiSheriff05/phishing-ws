@@ -242,8 +242,8 @@ def predict(payload: PredictRequest) -> PredictResponse:
     allowed_domains = sorted({d for d in link_domains if d and feedback_store.is_allowed(d)})
 
     if vectorizer is None or classifier is None or not model_loaded:
-        # In pre-training mode, treat each independent rule hit as a stronger signal.
-        simple_score = min(0.95, 0.25 * len(flags))
+        # Pretraining is intentionally a lightweight baseline, so rule hits explain risk but do not over-score.
+        simple_score = min(0.45, 0.15 * len(flags))
         proba = simple_score
         label = "phishing" if proba >= HEURISTIC_PHISHING_THRESHOLD else "legitimate"
 
