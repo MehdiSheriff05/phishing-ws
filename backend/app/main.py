@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -55,19 +57,34 @@ STRONG_HEURISTIC_MARKERS = (
 vectorizer = None
 classifier = None
 model_loaded = False
+model_disabled_by_env = False
 reputation_service = None
 feedback_store = None
 evaluation_log_store = None
+
+
+# Treat common truthy strings as "disable the trained model for this run."
+def is_model_disabled_by_env() -> bool:
+    return os.getenv("PHISHING_DISABLE_MODEL", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 # Initialize shared services once when FastAPI starts so each request can reuse them safely.
 @app.on_event("startup")
 def startup_event() -> None:
     # These globals behave like simple singletons for the running FastAPI process.
-    global vectorizer, classifier, model_loaded, reputation_service, feedback_store, evaluation_log_store
+    global vectorizer, classifier, model_loaded, model_disabled_by_env, reputation_service, feedback_store, evaluation_log_store
     reputation_service = DomainReputationService()
     feedback_store = FeedbackStore()
     evaluation_log_store = EvaluationLogStore()
+
+    # This switch lets demos compare heuristic-only and trained-model behavior without deleting artifacts.
+    model_disabled_by_env = is_model_disabled_by_env()
+    if model_disabled_by_env:
+        vectorizer = None
+        classifier = None
+        model_loaded = False
+        return
+
     try:
         # If artifacts exist, predictions use the trained ML model.
         vectorizer, classifier = load_artifacts()
@@ -80,7 +97,7 @@ def startup_event() -> None:
 # Return basic runtime status for scripts and the extension before running predictions.
 @app.get("/health")
 def health() -> dict[str, str | bool]:
-    return {"status": "ok", "model_loaded": model_loaded}
+    return {"status": "ok", "model_loaded": model_loaded, "model_disabled_by_env": model_disabled_by_env}
 
 
 # Return the current allowlist and blocklist so the UI can explain user-specific behavior.

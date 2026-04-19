@@ -370,6 +370,111 @@ Deactivate the virtual environment:
 deactivate
 ```
 
+## Run The API With Or Without The Model
+
+The backend can now be started in either mode without deleting files.
+
+Use **without model** when you want the pretraining or heuristic-only baseline. In this mode, the API still runs, but it does not load `vectorizer.joblib` or `classifier.joblib`.
+
+Use **with model** when you want the trained TF-IDF + Logistic Regression classifier to calculate the phishing probability.
+
+### macOS / Linux: Run Without Model
+
+```bash
+source .venv/bin/activate
+PHISHING_DISABLE_MODEL=1 python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+Health check:
+
+```bash
+curl http://127.0.0.1:8000/health
+```
+
+Expected health response:
+
+```json
+{
+  "status": "ok",
+  "model_loaded": false,
+  "model_disabled_by_env": true
+}
+```
+
+### macOS / Linux: Run With Model
+
+```bash
+source .venv/bin/activate
+python backend/train.py
+python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+Expected health response:
+
+```json
+{
+  "status": "ok",
+  "model_loaded": true,
+  "model_disabled_by_env": false
+}
+```
+
+### Windows PowerShell: Run Without Model
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+$env:PHISHING_DISABLE_MODEL="1"
+python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+Health check:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/health
+```
+
+To return to normal model loading in the same PowerShell window:
+
+```powershell
+Remove-Item Env:\PHISHING_DISABLE_MODEL
+```
+
+### Windows PowerShell: Run With Model
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+python backend/train.py
+python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+### Windows CMD: Run Without Model
+
+```cmd
+.venv\Scripts\activate.bat
+set PHISHING_DISABLE_MODEL=1
+python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+Health check:
+
+```cmd
+curl http://127.0.0.1:8000/health
+```
+
+To return to normal model loading in the same CMD window:
+
+```cmd
+set PHISHING_DISABLE_MODEL=
+```
+
+### Windows CMD: Run With Model
+
+```cmd
+.venv\Scripts\activate.bat
+python backend\train.py
+python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
 ## Windows PowerShell Setup
 
 Open PowerShell in the project folder.
@@ -503,10 +608,10 @@ test_data/fixed_evaluation_log_template.csv
 
 ### macOS / Linux Evaluation
 
-Start the backend before training if you want to record pretraining results:
+Start the backend in heuristic-only mode if you want to record pretraining results:
 
 ```bash
-python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
+PHISHING_DISABLE_MODEL=1 python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
 In a second Terminal window:
@@ -530,9 +635,10 @@ python backend/evaluate_test_data.py --api-base-url http://127.0.0.1:8000 --eval
 
 ### Windows PowerShell Evaluation
 
-Start the backend before training:
+Start the backend in heuristic-only mode:
 
 ```powershell
+$env:PHISHING_DISABLE_MODEL="1"
 python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
@@ -549,7 +655,12 @@ Train the model:
 python backend/train.py
 ```
 
-Restart the backend, then run post-training evaluation:
+Clear the heuristic-only switch, restart the backend, then run post-training evaluation:
+
+```powershell
+Remove-Item Env:\PHISHING_DISABLE_MODEL
+python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
+```
 
 ```powershell
 python backend/evaluate_test_data.py --api-base-url http://127.0.0.1:8000 --evaluation-csv test_data/fixed_evaluation_log_template.csv
@@ -557,9 +668,10 @@ python backend/evaluate_test_data.py --api-base-url http://127.0.0.1:8000 --eval
 
 ### Windows CMD Evaluation
 
-Start the backend before training:
+Start the backend in heuristic-only mode:
 
 ```cmd
+set PHISHING_DISABLE_MODEL=1
 python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
@@ -576,7 +688,12 @@ Train the model:
 python backend\train.py
 ```
 
-Restart the backend, then run post-training evaluation:
+Clear the heuristic-only switch, restart the backend, then run post-training evaluation:
+
+```cmd
+set PHISHING_DISABLE_MODEL=
+python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
+```
 
 ```cmd
 python backend\evaluate_test_data.py --api-base-url http://127.0.0.1:8000 --evaluation-csv test_data\fixed_evaluation_log_template.csv
@@ -617,15 +734,19 @@ Then open:
 http://127.0.0.1:8010/
 ```
 
-## Load The Chrome Extension
+## Install The Chrome Extension Locally
+
+Use this method while developing, testing, or presenting from your own machine.
 
 1. Open Chrome.
 2. Go to `chrome://extensions`.
-3. Turn on **Developer mode**.
+3. Turn on **Developer mode** in the top-right corner.
 4. Click **Load unpacked**.
 5. Select the `extension` folder inside this project.
-6. Open the extension options page.
-7. Confirm the API URL is:
+6. The extension should now appear in Chrome's extensions list.
+7. Click the extension's **Details** button if you want to pin it to the toolbar.
+8. Open the extension options page.
+9. Confirm the API URL is:
 
 ```text
 http://127.0.0.1:8000
@@ -639,6 +760,44 @@ Usage:
 4. Review the label, score, and flags.
 5. Use **Block Domain** if a linked domain should always warn.
 6. Use **Allow Domain** if a linked domain is trusted, while still allowing risky content to trigger warnings.
+
+## Package The Extension For Sharing
+
+Use this method when you want to share the extension folder with another tester without publishing it to the Chrome Web Store.
+
+1. Make sure the backend URL in the extension options points to the backend the tester can access.
+2. Zip the `extension` folder.
+3. Send the zip file to the tester.
+4. The tester should unzip it.
+5. The tester should open `chrome://extensions`.
+6. The tester should enable **Developer mode**.
+7. The tester should click **Load unpacked**.
+8. The tester should select the unzipped `extension` folder.
+
+Important: the extension does not include the backend. The FastAPI backend must also be running locally or deployed remotely.
+
+## Deploy The Extension With A Remote Backend
+
+For a remote demo or real deployment:
+
+1. Deploy the FastAPI backend to a public HTTPS URL.
+2. Confirm the deployed backend responds at `/health`.
+3. Load the Chrome extension locally with **Load unpacked**.
+4. Open the extension options page.
+5. Change the API URL from `http://127.0.0.1:8000` to the deployed backend URL.
+6. Save the option.
+7. Open Gmail or a test page and run a scan.
+
+For Chrome Web Store release:
+
+1. Keep the extension files inside the `extension` folder.
+2. Use a production HTTPS backend URL.
+3. Review requested permissions in `extension/manifest.json`.
+4. Zip the extension folder.
+5. Create a Chrome Web Store Developer account.
+6. Upload the zip package.
+7. Complete the privacy, permissions, and listing information.
+8. Submit for review.
 
 ## API Endpoints
 
